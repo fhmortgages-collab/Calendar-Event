@@ -7,7 +7,7 @@ from urllib.parse import quote
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="centered")
 
 st.title("📅 Local Event Text Parser & Calendar Sync")
-st.markdown("Paste your event details below. The app will accurately extract the title, date, time, and generate your Google Calendar link.")
+st.markdown("Paste your event details below to accurately extract the title, date, and time, and generate your direct Google Calendar link.")
 
 # Input Form
 raw_text = st.text_area(
@@ -24,22 +24,20 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
             try:
                 lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
                 
-                # 1. Title is typically the first line
+                # 1. Title is the first line
                 title = lines[0] if lines else "Untitled Event"
                 
-                # 2. Extract Date (e.g., "September 09, 2026" or "Sep 09, 2026")
-                date_str = "September 09, 2026" # default fallback
+                # 2. Extract Date (e.g., "September 09, 2026")
+                date_str = ""
                 date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', raw_text, re.IGNORECASE)
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Extract Start and End Times
+                # 3. Extract Start and End Times strictly
                 time_matches = re.findall(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
-                start_time_str = time_matches[0] if len(time_matches) > 0 else "9:15 AM"
-                end_time_str = time_matches[1] if len(time_matches) > 1 else "9:30 AM"
-
-                # 4. Extract Location if specified
-                location = "Not specified"
+                
+                # 4. Extract Location ONLY if explicitly preceded by "at"
+                location = ""
                 location_match = re.search(r'\bat\s+([^,\n]+(?:,[^,\n]+)*)', raw_text, re.IGNORECASE)
                 if location_match:
                     location = location_match.group(1).strip()
@@ -51,37 +49,52 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Event Title", title)
-                    st.metric("Date & Time", f"{date_str} @ {start_time_str} - {end_time_str}")
+                    if time_matches and len(time_matches) >= 2:
+                        st.metric("Time", f"{time_matches[0]} - {time_matches[1]}")
+                    else:
+                        st.metric("Time", "Not specified")
                 with col2:
-                    st.metric("Location", location)
+                    st.metric("Date", date_str if date_str else "Not specified")
+                    st.metric("Location", location if location else "None provided")
                 
-                # Format Dates for Google Calendar URL (YYYYMMDDTHHMMSSZ)
-                # Parse extracted strings into standard datetime objects for precise URL formatting
-                try:
-                    parsed_date = datetime.strptime(date_str, "%B %d %Y")
-                except:
-                    try:
-                        parsed_date = datetime.strptime(date_str, "%b %d %Y")
-                    except:
-                        parsed_date = datetime(2026, 9, 9)
-                        
-                # Format for Google Calendar template link
-                date_formatted = parsed_date.strftime("%Y%m%d")
-                start_formatted = "091500" # 9:15 AM
-                end_formatted = "093000"   # 9:30 AM
-                
-                dates_param = f"&dates={date_formatted}T{start_formatted}Z/{date_formatted}T{end_formatted}Z"
-                
-                # Construct Google Calendar Template URL
+                # Build Google Calendar URL
                 base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
                 encoded_title = quote(title)
-                encoded_location = quote(location if location != "Not specified" else "")
+                encoded_location = quote(location) if location else ""
                 
-                final_calendar_url = f"{base_cal_url}&text={encoded_title}&location={encoded_location}{dates_param}"
+                # Format dates and times into GCal format (YYYYMMDDTHHMMSSZ)
+                dates_param = ""
+                if date_str and len(time_matches) >= 2:
+                    try:
+                        # Parse date string
+                        parsed_date = datetime.strptime(date_str, "%B %d %Y")
+                    except:
+                        try:
+                            parsed_date = datetime.strptime(date_str, "%b %d %Y")
+                        except:
+                            parsed_date = None
+                            
+                    if parsed_date:
+                        date_formatted = parsed_date.strftime("%Y%m%d")
+                        
+                        # Convert 12-hour format strings to 24-hour time strings for URL
+                        start_dt = datetime.strptime(time_matches[0].upper(), "%I:%M %p")
+                        end_dt = datetime.strptime(time_matches[1].upper(), "%I:%M %p")
+                        
+                        start_formatted = start_dt.strftime("%H%M%S")
+                        end_formatted = end_dt.strftime("%H%M%S")
+                        
+                        dates_param = f"&dates={date_formatted}T{start_formatted}Z/{date_formatted}T{end_formatted}Z"
+
+                final_calendar_url = f"{base_cal_url}&text={encoded_title}"
+                if encoded_location:
+                    final_calendar_url += f"&location={encoded_location}"
+                if dates_param:
+                    final_calendar_url += dates_param
                 
                 st.markdown("---")
                 st.markdown("### 🚀 Add to Your Calendar")
-                st.markdown(f'<a href="{final_calendar_url}" target="_blank"><button style="background-color:#1a73e8;color:white;padding:10px 20px;border:none;border-radius:4px;cursor:pointer;font-size:16px;">📅 Open in Google Calendar with Reminders</button></a>', unsafe_allow_html=True)
+                st.markdown(f'<a href="{final_calendar_url}" target="_blank"><button style="background-color:#1a73e8;color:white;padding:10px 20px;border:none;border-radius:4px;cursor:pointer;font-size:16px;">📅 Open in Google Calendar</button></a>', unsafe_allow_html=True)
 
             except Exception as e:
                 st.error(f"An error occurred during processing: {str(e)}")
