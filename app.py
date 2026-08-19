@@ -7,7 +7,7 @@ from urllib.parse import quote
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="centered")
 
 st.title("📅 Local Event Text Parser & Calendar Sync")
-st.markdown("Paste your event details below to accurately extract the title, date, and time, and generate your direct Google Calendar link.")
+st.markdown("Paste your event details below to accurately extract the title, date, and exact time window.")
 
 # Input Form
 raw_text = st.text_area(
@@ -33,9 +33,13 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Extract Start and End Times strictly
-                time_matches = re.findall(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
-                
+                # 3. Target the exact start and end time range (e.g., 9:15 AM - 9:30 AM)
+                start_time_str, end_time_str = "", ""
+                time_range_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
+                if time_range_match:
+                    start_time_str = time_range_match.group(1)
+                    end_time_str = time_range_match.group(2)
+
                 # 4. Extract Location ONLY if explicitly preceded by "at"
                 location = ""
                 location_match = re.search(r'\bat\s+([^,\n]+(?:,[^,\n]+)*)', raw_text, re.IGNORECASE)
@@ -49,10 +53,7 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Event Title", title)
-                    if time_matches and len(time_matches) >= 2:
-                        st.metric("Time", f"{time_matches[0]} - {time_matches[1]}")
-                    else:
-                        st.metric("Time", "Not specified")
+                    st.metric("Time", f"{start_time_str} - {end_time_str}" if start_time_str else "Not specified")
                 with col2:
                     st.metric("Date", date_str if date_str else "Not specified")
                     st.metric("Location", location if location else "None provided")
@@ -64,9 +65,8 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 
                 # Format dates and times into GCal format (YYYYMMDDTHHMMSSZ)
                 dates_param = ""
-                if date_str and len(time_matches) >= 2:
+                if date_str and start_time_str and end_time_str:
                     try:
-                        # Parse date string
                         parsed_date = datetime.strptime(date_str, "%B %d %Y")
                     except:
                         try:
@@ -77,9 +77,8 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                     if parsed_date:
                         date_formatted = parsed_date.strftime("%Y%m%d")
                         
-                        # Convert 12-hour format strings to 24-hour time strings for URL
-                        start_dt = datetime.strptime(time_matches[0].upper(), "%I:%M %p")
-                        end_dt = datetime.strptime(time_matches[1].upper(), "%I:%M %p")
+                        start_dt = datetime.strptime(start_time_str.upper(), "%I:%M %p")
+                        end_dt = datetime.strptime(end_time_str.upper(), "%I:%M %p")
                         
                         start_formatted = start_dt.strftime("%H%M%S")
                         end_formatted = end_dt.strftime("%H%M%S")
