@@ -10,7 +10,7 @@ st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", 
 st.title("📅 Event Text & PDF Parser")
 st.markdown("Choose your preferred method below to extract event details and generate your Google Calendar link.")
 
-# Tabs or Radio buttons for both options
+# Input Method Selection
 input_method = st.radio("Select Input Method:", ["Upload PDF File", "Paste Text Manually"])
 
 extracted_text = ""
@@ -32,7 +32,7 @@ if input_method == "Upload PDF File":
 raw_text = st.text_area(
     "Event Details:", 
     height=150, 
-    value=extracted_text if extracted_text else "The View + The Weekend View - taping ends at 1:30p!\nWednesday, September 09, 2026\n9:15 AM - 9:30 AM ET\nLocation: CBS Broadcast Center, 524 West 57th Street, New York, NY",
+    value=extracted_text if extracted_text else "Team Lunch Meeting\nWednesday, September 09, 2026\n10Am to 1pm at Lafayette",
     placeholder="Paste event text here or upload a PDF above..."
 )
 
@@ -53,21 +53,20 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Robust Time Range Extraction (handles "-" or "to")
+                # 3. Flexible Time Range Extraction (handles "10Am to 1pm" or "10:00 AM - 1:00 PM")
                 start_time_str, end_time_str = "", ""
-                time_range_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
+                time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
-                    start_time_str = time_range_match.group(1)
-                    end_time_str = time_range_match.group(2)
+                    start_time_str = time_range_match.group(1).upper()
+                    end_time_str = time_range_match.group(2).upper()
 
-                # 4. Accurate Location Extraction (looks for "Location:" label first, or clean address patterns)
+                # 4. Flexible Location Extraction (handles "Location: ..." or "at [Place name]")
                 location = ""
                 loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
                 if loc_label_match:
                     location = loc_label_match.group(1).strip()
                 else:
-                    # Look for "at [Address]" avoiding casual instances like "ends at"
-                    loc_at_match = re.search(r'\bat\s+([A-Z0-9][^,\n]+(?:,[^,\n]+){1,3})', raw_text)
+                    loc_at_match = re.search(r'\bat\s+([A-Z0-9][^,\n]+(?:,[^,\n]+){0,3})', raw_text)
                     if loc_at_match:
                         location = loc_at_match.group(1).strip()
 
@@ -102,13 +101,23 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                     if parsed_date:
                         date_formatted = parsed_date.strftime("%Y%m%d")
                         
-                        start_dt = datetime.strptime(start_time_str.upper(), "%I:%M %p")
-                        end_dt = datetime.strptime(end_time_str.upper(), "%I:%M %p")
+                        # Helper to parse times whether they have minutes or not (e.g. "10AM" vs "10:00 AM")
+                        def parse_time_flexible(t_str):
+                            t_str = t_str.replace(" ", "")
+                            for fmt in ("%I:%M%p", "%I%p"):
+                                try:
+                                    return datetime.strptime(t_str, fmt)
+                                except ValueError:
+                                    continue
+                            return None
+
+                        start_dt = parse_time_flexible(start_time_str)
+                        end_dt = parse_time_flexible(end_time_str)
                         
-                        start_formatted = start_dt.strftime("%H%M%S")
-                        end_formatted = end_dt.strftime("%H%M%S")
-                        
-                        dates_param = f"&dates={date_formatted}T{start_formatted}/{date_formatted}T{end_formatted}"
+                        if start_dt and end_dt:
+                            start_formatted = start_dt.strftime("%H%M%S")
+                            end_formatted = end_dt.strftime("%H%M%S")
+                            dates_param = f"&dates={date_formatted}T{start_formatted}/{date_formatted}T{end_formatted}"
 
                 final_calendar_url = f"{base_cal_url}&text={encoded_title}"
                 if encoded_location:
