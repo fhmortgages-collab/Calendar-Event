@@ -32,7 +32,7 @@ if input_method == "Upload PDF File":
 raw_text = st.text_area(
     "Event Details:", 
     height=150, 
-    value=extracted_text if extracted_text else "",
+    value=extracted_text if extracted_text else "The View + The Weekend View - taping ends at 1:30p!\nWednesday, September 09, 2026\n9:15 AM - 9:30 AM ET\nLocation: CBS Broadcast Center, 524 West 57th Street, New York, NY",
     placeholder="Paste event text here or upload a PDF above..."
 )
 
@@ -53,18 +53,23 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Target the exact start and end time range (e.g., 9:15 AM - 9:30 AM)
+                # 3. Robust Time Range Extraction (handles "-" or "to")
                 start_time_str, end_time_str = "", ""
-                time_range_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
+                time_range_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
                     start_time_str = time_range_match.group(1)
                     end_time_str = time_range_match.group(2)
 
-                # 4. Extract Location ONLY if explicitly preceded by "at"
+                # 4. Accurate Location Extraction (looks for "Location:" label first, or clean address patterns)
                 location = ""
-                location_match = re.search(r'\bat\s+([^,\n]+(?:,[^,\n]+)*)', raw_text, re.IGNORECASE)
-                if location_match:
-                    location = location_match.group(1).strip()
+                loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
+                if loc_label_match:
+                    location = loc_label_match.group(1).strip()
+                else:
+                    # Look for "at [Address]" avoiding casual instances like "ends at"
+                    loc_at_match = re.search(r'\bat\s+([A-Z0-9][^,\n]+(?:,[^,\n]+){1,3})', raw_text)
+                    if loc_at_match:
+                        location = loc_at_match.group(1).strip()
 
                 st.success("Successfully extracted details!")
                 
