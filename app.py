@@ -53,20 +53,20 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Flexible Time Range Extraction (handles "10Am to 1pm" or "10:00 AM - 1:00 PM")
+                # 3. Flexible Time Range Extraction (e.g. "10Am to 1pm")
                 start_time_str, end_time_str = "", ""
                 time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
                     start_time_str = time_range_match.group(1).upper()
                     end_time_str = time_range_match.group(2).upper()
 
-                # 4. Flexible Location Extraction (handles "Location: ..." or "at [Place name]")
+                # 4. Improved Location Extraction (checks explicit label or captures text following "at")
                 location = ""
                 loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
                 if loc_label_match:
                     location = loc_label_match.group(1).strip()
                 else:
-                    loc_at_match = re.search(r'\bat\s+([A-Z0-9][^,\n]+(?:,[^,\n]+){0,3})', raw_text)
+                    loc_at_match = re.search(r'\bat\s+([^\n]+)', raw_text, re.IGNORECASE)
                     if loc_at_match:
                         location = loc_at_match.group(1).strip()
 
@@ -101,7 +101,6 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                     if parsed_date:
                         date_formatted = parsed_date.strftime("%Y%m%d")
                         
-                        # Helper to parse times whether they have minutes or not (e.g. "10AM" vs "10:00 AM")
                         def parse_time_flexible(t_str):
                             t_str = t_str.replace(" ", "")
                             for fmt in ("%I:%M%p", "%I%p"):
