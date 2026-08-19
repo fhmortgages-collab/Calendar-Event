@@ -2,23 +2,43 @@ import streamlit as st
 import re
 from datetime import datetime
 from urllib.parse import quote
+from pypdf import PdfReader
 
 # Page Configuration
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="centered")
 
-st.title("📅 Local Event Text Parser & Calendar Sync")
-st.markdown("Paste your event details below to accurately extract the title, date, and exact time window.")
+st.title("📅 Event Text & PDF Parser")
+st.markdown("Choose your preferred method below to extract event details and generate your Google Calendar link.")
 
-# Input Form
+# Tabs or Radio buttons for both options
+input_method = st.radio("Select Input Method:", ["Upload PDF File", "Paste Text Manually"])
+
+extracted_text = ""
+
+if input_method == "Upload PDF File":
+    uploaded_file = st.file_uploader("Upload Event PDF:", type=["pdf"])
+    if uploaded_file is not None:
+        try:
+            reader = PdfReader(uploaded_file)
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    extracted_text += text + "\n"
+            st.success("Successfully extracted text from uploaded PDF!")
+        except Exception as e:
+            st.error(f"Error reading PDF file: {str(e)}")
+
+# Editable text area populated either by PDF upload or manual pasting
 raw_text = st.text_area(
-    "Paste Event Details Here:", 
+    "Event Details:", 
     height=150, 
-    value="The View + The Weekend View - taping ends at 1:30p!\nWednesday, September 09, 2026\n9:15 AM - 9:30 AM ET"
+    value=extracted_text if extracted_text else "",
+    placeholder="Paste event text here or upload a PDF above..."
 )
 
 if st.button("Parse and Generate Calendar Link", type="primary"):
     if not raw_text.strip():
-        st.error("Please paste some event text first.")
+        st.error("Please provide event details via PDF upload or text pasting first.")
     else:
         with st.spinner("Extracting details..."):
             try:
@@ -63,7 +83,7 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 encoded_title = quote(title)
                 encoded_location = quote(location) if location else ""
                 
-                # Format dates and times into local GCal format (YYYYMMDDTHHMMSS) without 'Z'
+                # Format dates and times into local GCal format (YYYYMMDDTHHMMSS)
                 dates_param = ""
                 if date_str and start_time_str and end_time_str:
                     try:
@@ -83,7 +103,6 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                         start_formatted = start_dt.strftime("%H%M%S")
                         end_formatted = end_dt.strftime("%H%M%S")
                         
-                        # Local time formatting (omitting 'Z' so GCal keeps local time)
                         dates_param = f"&dates={date_formatted}T{start_formatted}/{date_formatted}T{end_formatted}"
 
                 final_calendar_url = f"{base_cal_url}&text={encoded_title}"
