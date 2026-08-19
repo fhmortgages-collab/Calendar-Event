@@ -58,9 +58,9 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
     else:
         with st.spinner("Extracting details..."):
             try:
-                lines = [line.strip() for line in raw_text.split('\n'] if line.strip()]
+                lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
                 
-                # 1. Intelligent Title Selection (Look for Subject lines or meaningful headers, skip emails/metadata)
+                # 1. Intelligent Title Selection
                 title = "Untitled Event"
                 for line in lines:
                     if "@" not in line and "http" not in line and len(line) > 5:
@@ -76,23 +76,21 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Flexible Time Range Extraction (handles "10 AM - 1 PM" or "10:00 AM to 1:00 PM")
+                # 3. Flexible Time Range Extraction
                 start_time_str, end_time_str = "", ""
                 time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
                     start_time_str = time_range_match.group(1).upper()
                     end_time_str = time_range_match.group(2).upper()
 
-                # 4. Location Extraction (ignoring timestamps)
+                # 4. Location Extraction
                 location = ""
                 loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
                 if loc_label_match:
                     location = loc_label_match.group(1).strip()
                 else:
-                    # Look for "at [Place]" making sure it's not part of an email timestamp
                     at_matches = re.findall(r'\bat\s+([A-Za-z0-9\s,\.-]+)', raw_text)
                     for match in at_matches:
-                        # Exclude matches that look like times (e.g., "at 10:07 AM")
                         if not re.search(r'\d{1,2}:\d{2}', match):
                             location = match.strip()
                             break
