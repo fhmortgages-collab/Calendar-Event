@@ -20,19 +20,35 @@ if input_method == "Upload PDF File":
     if uploaded_file is not None:
         try:
             reader = PdfReader(uploaded_file)
+            raw_pdf_text = ""
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
-                    extracted_text += text + "\n"
-            st.success("Successfully extracted text from uploaded PDF!")
+                    raw_pdf_text += text + "\n"
+            
+            # Filter out email print/export headers (URLs, page numbers, timestamps)
+            filtered_lines = []
+            for line in raw_pdf_text.split('\n'):
+                l_str = line.strip()
+                if not l_str:
+                    continue
+                # Skip typical Gmail/browser print headers
+                if any(noise in l_str.lower() for noise in ["http://", "https://", "page ", "mail.google.com"]):
+                    continue
+                if re.match(r'^\d{1,2}/\d{1,2}/\d{2},?\s*\d{1,2}:\d{2}', l_str):
+                    continue
+                filtered_lines.append(l_str)
+            
+            extracted_text = "\n".join(filtered_lines)
+            st.success("Successfully extracted and cleaned text from PDF!")
         except Exception as e:
             st.error(f"Error reading PDF file: {str(e)}")
 
 # Editable text area populated either by PDF upload or manual pasting
 raw_text = st.text_area(
     "Event Details:", 
-    height=150, 
-    value=extracted_text if extracted_text else "Team Lunch Meeting\nWednesday, September 09, 2026\n10Am to 1pm at Lafayette",
+    height=180, 
+    value=extracted_text if extracted_text else "",
     placeholder="Paste event text here or upload a PDF above..."
 )
 
@@ -42,33 +58,44 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
     else:
         with st.spinner("Extracting details..."):
             try:
-                lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+                lines = [line.strip() for line in raw_text.split('\n'] if line.strip()]
                 
-                # 1. Title is the first line
-                title = lines[0] if lines else "Untitled Event"
-                
-                # 2. Extract Date (e.g., "September 09, 2026")
+                # 1. Intelligent Title Selection (Look for Subject lines or meaningful headers, skip emails/metadata)
+                title = "Untitled Event"
+                for line in lines:
+                    if "@" not in line and "http" not in line and len(line) > 5:
+                        if ":" in line or "Reminder" in line or "Meeting" in line or "View" in line:
+                            title = line.strip()
+                            break
+                if title == "Untitled Event" and lines:
+                    title = lines[0]
+
+                # 2. Extract Date (e.g., "Aug 18, 2026" or "August 18, 2026")
                 date_str = ""
                 date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', raw_text, re.IGNORECASE)
                 if date_match:
                     date_str = date_match.group(1).replace(",", "")
 
-                # 3. Flexible Time Range Extraction (e.g. "10Am to 1pm")
+                # 3. Flexible Time Range Extraction (handles "10 AM - 1 PM" or "10:00 AM to 1:00 PM")
                 start_time_str, end_time_str = "", ""
                 time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
                     start_time_str = time_range_match.group(1).upper()
                     end_time_str = time_range_match.group(2).upper()
 
-                # 4. Improved Location Extraction (checks explicit label or captures text following "at")
+                # 4. Location Extraction (ignoring timestamps)
                 location = ""
                 loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
                 if loc_label_match:
                     location = loc_label_match.group(1).strip()
                 else:
-                    loc_at_match = re.search(r'\bat\s+([^\n]+)', raw_text, re.IGNORECASE)
-                    if loc_at_match:
-                        location = loc_at_match.group(1).strip()
+                    # Look for "at [Place]" making sure it's not part of an email timestamp
+                    at_matches = re.findall(r'\bat\s+([A-Za-z0-9\s,\.-]+)', raw_text)
+                    for match in at_matches:
+                        # Exclude matches that look like times (e.g., "at 10:07 AM")
+                        if not re.search(r'\d{1,2}:\d{2}', match):
+                            location = match.strip()
+                            break
 
                 st.success("Successfully extracted details!")
                 
@@ -87,7 +114,6 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 encoded_title = quote(title)
                 encoded_location = quote(location) if location else ""
                 
-                # Format dates and times into local GCal format (YYYYMMDDTHHMMSS)
                 dates_param = ""
                 if date_str and start_time_str and end_time_str:
                     try:
