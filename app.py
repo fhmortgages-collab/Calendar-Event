@@ -26,13 +26,12 @@ if input_method == "Upload PDF File":
                 if text:
                     raw_pdf_text += text + "\n"
             
-            # Filter out email print/export headers (URLs, page numbers, timestamps)
+            # Filter out typical email header noise
             filtered_lines = []
             for line in raw_pdf_text.split('\n'):
                 l_str = line.strip()
                 if not l_str:
                     continue
-                # Skip typical Gmail/browser print headers
                 if any(noise in l_str.lower() for noise in ["http://", "https://", "page ", "mail.google.com"]):
                     continue
                 if re.match(r'^\d{1,2}/\d{1,2}/\d{2},?\s*\d{1,2}:\d{2}', l_str):
@@ -60,40 +59,44 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
             try:
                 lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
                 
-                # 1. Intelligent Title Selection
+                # 1. Intelligent Title Selection (Look for volunteer roles, event names, or headings)
                 title = "Untitled Event"
                 for line in lines:
-                    if "@" not in line and "http" not in line and len(line) > 5:
-                        if ":" in line or "Reminder" in line or "Meeting" in line or "View" in line:
-                            title = line.strip()
-                            break
+                    if any(keyword in line for keyword in ["Ambassador", "Mission", "Meeting", "Volunteer", "Shift", "Reminder"]):
+                        title = line.strip()
+                        break
                 if title == "Untitled Event" and lines:
                     title = lines[0]
 
-                # 2. Extract Date (e.g., "Aug 18, 2026" or "August 18, 2026")
+                # 2. Extract Date (e.g., "August 21, 2026" or "Friday, August 21")
                 date_str = ""
-                date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', raw_text, re.IGNORECASE)
+                date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*([A-Za-z]+\s+\d{1,2})', raw_text, re.IGNORECASE)
                 if date_match:
-                    date_str = date_match.group(1).replace(",", "")
+                    # Append current year 2026 for complete parsing
+                    date_str = date_match.group(1).replace(",", "") + " 2026"
 
-                # 3. Flexible Time Range Extraction
+                # 3. Flexible Time Range Extraction (e.g., "10 AM - 1 PM")
                 start_time_str, end_time_str = "", ""
                 time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', raw_text, re.IGNORECASE)
                 if time_range_match:
                     start_time_str = time_range_match.group(1).upper()
                     end_time_str = time_range_match.group(2).upper()
 
-                # 4. Location Extraction
+                # 4. Location Extraction (Capturing full street addresses or location names)
                 location = ""
                 loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', raw_text, re.IGNORECASE)
                 if loc_label_match:
                     location = loc_label_match.group(1).strip()
                 else:
-                    at_matches = re.findall(r'\bat\s+([A-Za-z0-9\s,\.-]+)', raw_text)
-                    for match in at_matches:
-                        if not re.search(r'\d{1,2}:\d{2}', match):
-                            location = match.strip()
-                            break
+                    # Search for street address patterns (e.g., numbers followed by street name / Lafayette St)
+                    addr_match = re.search(r'(\d+\s+[A-Za-z0-9\s,\.-]+(?:New York|NY)[\s\d]*)', raw_text, re.IGNORECASE)
+                    if addr_match:
+                        location = addr_match.group(1).strip()
+                    else:
+                        # Fallback to explicit venue/campus tags if present
+                        campus_match = re.search(r'((?:Tribeca|Bowery)\s+Campus[^\n]*)', raw_text, re.IGNORECASE)
+                        if campus_match:
+                            location = campus_match.group(1).strip()
 
                 st.success("Successfully extracted details!")
                 
