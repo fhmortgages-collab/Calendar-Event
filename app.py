@@ -63,7 +63,7 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                 encoded_title = quote(title)
                 encoded_location = quote(location) if location else ""
                 
-                # Format dates and times into GCal format (YYYYMMDDTHHMMSSZ)
+                # Format dates and times into local GCal format (YYYYMMDDTHHMMSS) without 'Z'
                 dates_param = ""
                 if date_str and start_time_str and end_time_str:
                     try:
@@ -83,7 +83,8 @@ if st.button("Parse and Generate Calendar Link", type="primary"):
                         start_formatted = start_dt.strftime("%H%M%S")
                         end_formatted = end_dt.strftime("%H%M%S")
                         
-                        dates_param = f"&dates={date_formatted}T{start_formatted}Z/{date_formatted}T{end_formatted}Z"
+                        # Local time formatting (omitting 'Z' so GCal keeps local time)
+                        dates_param = f"&dates={date_formatted}T{start_formatted}/{date_formatted}T{end_formatted}"
 
                 final_calendar_url = f"{base_cal_url}&text={encoded_title}"
                 if encoded_location:
