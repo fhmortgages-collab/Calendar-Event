@@ -25,11 +25,11 @@ with col_input:
     st.markdown("### 📝 Enter Event Details")
     raw_text = st.text_area(
         "Paste your event text here",
-        value=st.session_state.event_text,
+        value=st.session_state.event_text,      # <-- No key, value comes from session
         height=180,
-        placeholder="e.g. Meeting on Friday at 2pm, Room 101 ...",
-        key="event_text_area"
+        placeholder="e.g. Meeting on Friday at 2pm, Room 101 ..."
     )
+    # Sync typing back to session state
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
 
@@ -44,7 +44,7 @@ with col_input:
     with c2:
         if st.button("🗑️ Clear / Reset", use_container_width=True):
             clear_all()
-            st.rerun()
+            # No rerun needed – session state change triggers rerun automatically
 
     if st.session_state.event_text.strip():
         st.session_state.show_mapping = True
@@ -53,7 +53,7 @@ with col_form:
     if st.session_state.show_mapping and st.session_state.event_text.strip():
         text = st.session_state.event_text
 
-        # --- SMART FILTERING ---
+        # --- SMART FILTERING (unchanged) ---
         all_lines, title_candidates, date_candidates, time_candidates, loc_candidates = [], [], [], [], []
         extracted_lines = [line.strip() for line in text.split('\n') if line.strip()]
         all_lines.extend(extracted_lines)
@@ -103,7 +103,6 @@ with col_form:
 
         # --- ROW 3: TIME (DETECTED + COMPACT PICKER) ---
         st.markdown("**Event Time**")
-        # Parse detected times
         parsed_start, parsed_end = time(9, 0), time(10, 0)
         detected_start_str = "Not detected"
         detected_end_str = "Not detected"
@@ -128,19 +127,14 @@ with col_form:
                     parsed_end = e_time
                     detected_end_str = e_time.strftime("%I:%M %p")
 
-        # Compact time picker with detected label
         def compact_time_picker(label, default_time, detected_str, key_prefix):
-            # Convert default to hour (12h), minute, am/pm
             hour_12 = default_time.hour % 12
             if hour_12 == 0: hour_12 = 12
             minute = default_time.minute
             am_pm = "AM" if default_time.hour < 12 else "PM"
 
-            # Show detected time as a label
             st.write(f"**Detected {label}:** {detected_str}")
-
-            # Dropdowns (compact, labels collapsed)
-            cols = st.columns([1, 1, 1, 0.2])  # last is spacer
+            cols = st.columns([1, 1, 1, 0.2])
             with cols[0]:
                 hour = st.selectbox(
                     f"{label} Hour",
@@ -165,7 +159,6 @@ with col_form:
                     key=f"{key_prefix}_ampm",
                     label_visibility="collapsed"
                 )
-            # Convert to 24h
             hour_24 = hour if am_pm == "AM" else hour + 12
             if hour_24 == 12 and am_pm == "AM":
                 hour_24 = 0
@@ -173,7 +166,6 @@ with col_form:
                 hour_24 = 12
             return time(hour_24, int(minute))
 
-        # Start and End times side‑by‑side
         time_col1, time_col2 = st.columns(2)
         with time_col1:
             final_start = compact_time_picker("Start", parsed_start, detected_start_str, "start")
