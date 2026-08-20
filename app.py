@@ -5,23 +5,24 @@ from urllib.parse import quote
 import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
-import os
-import sys
 
 # Page Configuration
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
 
-# --- SESSION STATE MANAGEMENT ---
+# --- SESSION STATE INITIALIZATION ---
 if 'show_mapping' not in st.session_state:
     st.session_state.show_mapping = False
 if 'widget_key' not in st.session_state:
     st.session_state.widget_key = 0
+if 'event_text' not in st.session_state:
+    st.session_state.event_text = ""
 if 'last_error' not in st.session_state:
     st.session_state.last_error = ""
 
 def clear_all_action():
     st.session_state.show_mapping = False
     st.session_state.widget_key += 1
+    st.session_state.event_text = ""
     st.session_state.last_error = ""
 
 # --- MAIN LAYOUT ---
@@ -30,7 +31,7 @@ st.title("📅 Compact Event Parser")
 col_input, col_form = st.columns([1, 1.3], gap="small")
 
 with col_input:
-    # Use dropdown (selectbox) instead of radio
+    # Dropdown for input method
     input_method = st.selectbox(
         "Input Method",
         ["Upload PDF", "Upload Image", "Paste Text"],
@@ -51,7 +52,7 @@ with col_input:
                 
                 # If no text, try OCR
                 if not raw_pdf_text:
-                    with st.spinner("OCR scanning PDF pages (this may take a while)..."):
+                    with st.spinner("OCR scanning PDF pages (may take a while)..."):
                         ocr_text = ""
                         try:
                             for page_num in range(len(doc)):
@@ -63,7 +64,6 @@ with col_input:
                         except Exception as e:
                             st.session_state.last_error = f"OCR failed: {str(e)}"
                             st.error(f"OCR error: {e}. Please install Tesseract or paste text manually.")
-                            # Fallback: allow manual paste
                             raw_pdf_text = ""
                 
                 extracted_text = "\n".join([line.strip() for line in raw_pdf_text.split('\n') if line.strip()])
@@ -83,23 +83,39 @@ with col_input:
                 st.error(f"Image OCR error: {str(e)}")
                 st.session_state.last_error = f"OCR error: {str(e)}"
 
-    # Text area – always visible
-    raw_text = st.text_area("Event Details Text", value=extracted_text, height=180, 
-                            placeholder="Event text will appear here...", key=f"text_{st.session_state.widget_key}")
+    # If new text was extracted, store it in session state
+    if extracted_text:
+        st.session_state.event_text = extracted_text
+    # If switching to Paste Text, keep the existing session text
+    elif input_method == "Paste Text":
+        # Keep the current session text (user may paste manually)
+        pass
 
-    # Debug expander – shows what was extracted
+    # Text area – uses session state value
+    raw_text = st.text_area(
+        "Event Details Text",
+        value=st.session_state.event_text,
+        height=180,
+        placeholder="Event text will appear here...",
+        key=f"text_{st.session_state.widget_key}"
+    )
+    # Update session state when user types manually
+    if raw_text != st.session_state.event_text:
+        st.session_state.event_text = raw_text
+
+    # Debug expander
     with st.expander("🔍 Debug info (extracted text length)"):
-        st.write(f"Extracted text length: {len(extracted_text)} characters")
+        st.write(f"Session text length: {len(st.session_state.event_text)} characters")
         if st.session_state.last_error:
             st.warning(f"Last error: {st.session_state.last_error}")
-        if extracted_text:
-            st.text_area("Extracted content (first 500 chars)", extracted_text[:500], height=100)
+        if st.session_state.event_text:
+            st.text_area("Current content (first 500 chars)", st.session_state.event_text[:500], height=100)
 
     # Buttons
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
-            if raw_text.strip():
+            if st.session_state.event_text.strip():
                 st.session_state.show_mapping = True
             else:
                 st.warning("No text to process. Please upload a file or enter text.")
@@ -107,16 +123,17 @@ with col_input:
     with c2:
         st.button("🗑️ Clear / Reset", on_click=clear_all_action, use_container_width=True)
 
-    # Auto-show mapping if text is present (but only if we have some text)
-    if extracted_text.strip():
+    # Auto-show mapping if text exists in session
+    if st.session_state.event_text.strip():
         st.session_state.show_mapping = True
 
 with col_form:
-    if st.session_state.show_mapping and raw_text.strip():
-        # --- SMART FILTERING LOGIC (unchanged) ---
+    if st.session_state.show_mapping and st.session_state.event_text.strip():
+        # --- SMART FILTERING LOGIC ---
+        text = st.session_state.event_text
         all_lines, title_candidates, date_candidates, time_candidates, loc_candidates = [], [], [], [], []
         
-        extracted_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+        extracted_lines = [line.strip() for line in text.split('\n') if line.strip()]
         all_lines.extend(extracted_lines)
         
         for line in extracted_lines:
@@ -188,7 +205,7 @@ with col_form:
         with l_col2: final_location = st.text_input("Final Location", value=clean_loc)
         
         # --- ROW 5: NOTES & SUBMIT ---
-        final_desc = st.text_area("Event Notes", value=raw_text, height=68) 
+        final_desc = st.text_area("Event Notes", value=text, height=68) 
         
         if st.button("✅ Generate Link", use_container_width=True):
             base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
