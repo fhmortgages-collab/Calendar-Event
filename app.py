@@ -1,23 +1,91 @@
 import streamlit as st
 import re
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from urllib.parse import quote
+import json
+import google.generativeai as genai
 
-# Page Configuration
+# --- Page Configuration ---
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
 
-# --- SESSION STATE ---
+# --- Session State ---
 if 'show_mapping' not in st.session_state:
     st.session_state.show_mapping = False
 if 'event_text' not in st.session_state:
     st.session_state.event_text = ""
+if 'ai_parsed' not in st.session_state:
+    st.session_state.ai_parsed = None  # Will store dict from AI
+if 'api_key_valid' not in st.session_state:
+    st.session_state.api_key_valid = True
 
 def clear_all():
     st.session_state.show_mapping = False
     st.session_state.event_text = ""
+    st.session_state.ai_parsed = None
+
+# --- AI Setup ---
+# Try to configure Gemini using secrets; if not available, show warning
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+except Exception as e:
+    st.session_state.api_key_valid = False
+    model = None
+
+def parse_with_ai(text):
+    """Send text to Gemini AI and return structured JSON."""
+    if not model or not st.session_state.api_key_valid:
+        return None
+
+    prompt = f"""
+You are an expert calendar assistant. Extract event details from the following text.
+Return ONLY a valid JSON object with these exact keys:
+- "title" (string)
+- "date" (string in YYYY-MM-DD format)
+- "start_time" (string in HH:MM AM/PM format, e.g. "02:30 PM")
+- "end_time" (string in HH:MM AM/PM format)
+- "location" (string)
+
+If a piece of information is missing, use an empty string "".
+
+Text:
+{text}
+"""
+    try:
+        response = model.generate_content(prompt)
+        # Extract JSON from response (might be wrapped in markdown)
+        json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
+        return json.loads(json_str)
+    except Exception as e:
+        st.error(f"AI parsing error: {e}")
+        return None
+
+# --- Helper: parse time string from AI ---
+def parse_time_from_ai(t_str):
+    if not t_str:
+        return None
+    t_str = t_str.strip().upper()
+    for fmt in ("%I:%M %p", "%I%p", "%I:%M%p"):
+        try:
+            return datetime.strptime(t_str.replace(" ", ""), fmt).time()
+        except:
+            continue
+    return None
+
+# --- Helper: date from AI ---
+def parse_date_from_ai(d_str):
+    if not d_str:
+        return None
+    try:
+        return datetime.strptime(d_str, "%Y-%m-%d").date()
+    except:
+        return None
 
 # --- MAIN LAYOUT ---
 st.title("📅 Compact Event Parser")
+
+if not st.session_state.api_key_valid:
+    st.warning("⚠️ Gemini API key not set. Please add it to Streamlit secrets (`GEMINI_API_KEY`) or use the manual fallback below.")
 
 col_input, col_form = st.columns([1, 1.3], gap="small")
 
@@ -25,115 +93,83 @@ with col_input:
     st.markdown("### 📝 Enter Event Details")
     raw_text = st.text_area(
         "Paste your event text here",
-        value=st.session_state.event_text,      # <-- No key, value comes from session
+        value=st.session_state.event_text,
         height=180,
         placeholder="e.g. Meeting on Friday at 2pm, Room 101 ..."
     )
-    # Sync typing back to session state
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
+        # Clear AI parsed when text changes
+        st.session_state.ai_parsed = None
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
+        if st.button("🔍 Extract with AI", use_container_width=True, type="primary"):
             if st.session_state.event_text.strip():
-                st.session_state.show_mapping = True
+                with st.spinner("🧠 AI is thinking..."):
+                    parsed = parse_with_ai(st.session_state.event_text)
+                    if parsed:
+                        st.session_state.ai_parsed = parsed
+                        st.session_state.show_mapping = True
+                    else:
+                        st.warning("AI parsing failed. Please fill in manually.")
+                        # Fallback: use rule-based extraction (we'll keep it as fallback)
+                        st.session_state.ai_parsed = None
+                        st.session_state.show_mapping = True
             else:
                 st.warning("Please paste some text first.")
-                st.session_state.show_mapping = False
     with c2:
         if st.button("🗑️ Clear / Reset", use_container_width=True):
             clear_all()
-            # No rerun needed – session state change triggers rerun automatically
 
-    if st.session_state.event_text.strip():
+    # Auto-show if text exists (for manual mode)
+    if st.session_state.event_text.strip() and not st.session_state.show_mapping:
         st.session_state.show_mapping = True
 
 with col_form:
     if st.session_state.show_mapping and st.session_state.event_text.strip():
         text = st.session_state.event_text
 
-        # --- SMART FILTERING (unchanged) ---
-        all_lines, title_candidates, date_candidates, time_candidates, loc_candidates = [], [], [], [], []
-        extracted_lines = [line.strip() for line in text.split('\n') if line.strip()]
-        all_lines.extend(extracted_lines)
+        # --- Get best guesses: AI first, then fallback to rule-based ---
+        if st.session_state.ai_parsed:
+            ai = st.session_state.ai_parsed
+            best_title = ai.get('title', '')
+            best_date = parse_date_from_ai(ai.get('date', ''))
+            best_start = parse_time_from_ai(ai.get('start_time', ''))
+            best_end = parse_time_from_ai(ai.get('end_time', ''))
+            best_location = ai.get('location', '')
+        else:
+            # Rule-based fallback (kept from before)
+            best_title = extract_title(text)
+            best_date = extract_date(text)
+            best_start, best_end = extract_time_range(text)
+            best_location = extract_location(text)
 
-        for line in extracted_lines:
-            lower_line = line.lower()
-            if re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)', lower_line):
-                date_candidates.append(line)
-            if re.search(r'(\d{1,2}(?::\d{2})?\s*(?:am|pm))', lower_line):
-                time_candidates.append(line)
-            if re.search(r'(location:|street|st|ave|avenue|blvd|campus|new york|ny|room)', lower_line) or re.search(r'\d+\s+[a-z]+', lower_line):
-                loc_candidates.append(line)
-            if len(line.split()) < 15 and not line.startswith("http"):
-                title_candidates.append(line)
-
-        if not date_candidates: date_candidates = all_lines if all_lines else [""]
-        if not time_candidates: time_candidates = all_lines if all_lines else [""]
-        if not loc_candidates: loc_candidates = all_lines if all_lines else [""]
-        if not title_candidates: title_candidates = all_lines if all_lines else [""]
+        # If still missing, set defaults
+        today = datetime.today().date()
+        if best_date is None:
+            best_date = today
+        if best_start is None:
+            best_start = time(9, 0)
+        if best_end is None:
+            best_end = time(10, 0)
 
         st.markdown("### 📝 Verify & Map Details")
-        manual_opt = "Other (Manual Entry)"
 
         # --- ROW 1: EVENT NAME ---
-        t_col1, t_col2 = st.columns(2)
-        with t_col1:
-            title_sel = st.selectbox("Detected Event Name", [manual_opt] + title_candidates)
-        with t_col2:
-            final_title = st.text_input("Final Event Name", value=title_sel if title_sel != manual_opt else "")
+        final_title = st.text_input("Event Name", value=best_title)
 
         # --- ROW 2: DATE ---
-        d_col1, d_col2 = st.columns(2)
-        with d_col1:
-            date_sel = st.selectbox("Detected Date", [manual_opt] + date_candidates)
-        parsed_date = datetime.today().date()
-        if date_sel != manual_opt and date_sel != "":
-            current_year = datetime.now().year
-            date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?,?\s*([A-Za-z]+\s+\d{1,2})', date_sel, re.IGNORECASE)
-            if date_match:
-                try:
-                    clean_date_str = f"{date_match.group(1).replace(',', '')} {current_year}"
-                    parsed_date = datetime.strptime(clean_date_str, "%B %d %Y").date()
-                except ValueError:
-                    pass
-        with d_col2:
-            final_date = st.date_input("Final Date", value=parsed_date)
+        final_date = st.date_input("Date", value=best_date)
 
-        # --- ROW 3: TIME (DETECTED + COMPACT PICKER) ---
+        # --- ROW 3: TIME (COMPACT PICKER) ---
         st.markdown("**Event Time**")
-        parsed_start, parsed_end = time(9, 0), time(10, 0)
-        detected_start_str = "Not detected"
-        detected_end_str = "Not detected"
-
-        if time_candidates and time_candidates[0] != "":
-            time_line = time_candidates[0]
-            time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', time_line, re.IGNORECASE)
-            def parse_time(t_str):
-                for fmt in ("%I:%M%p", "%I%p"):
-                    try:
-                        return datetime.strptime(t_str.replace(" ", "").upper(), fmt).time()
-                    except ValueError:
-                        continue
-                return None
-            if time_range_match:
-                s_time = parse_time(time_range_match.group(1))
-                e_time = parse_time(time_range_match.group(2))
-                if s_time:
-                    parsed_start = s_time
-                    detected_start_str = s_time.strftime("%I:%M %p")
-                if e_time:
-                    parsed_end = e_time
-                    detected_end_str = e_time.strftime("%I:%M %p")
-
-        def compact_time_picker(label, default_time, detected_str, key_prefix):
+        def compact_time_picker(label, default_time, key_prefix):
             hour_12 = default_time.hour % 12
             if hour_12 == 0: hour_12 = 12
             minute = default_time.minute
             am_pm = "AM" if default_time.hour < 12 else "PM"
 
-            st.write(f"**Detected {label}:** {detected_str}")
             cols = st.columns([1, 1, 1, 0.2])
             with cols[0]:
                 hour = st.selectbox(
@@ -168,25 +204,15 @@ with col_form:
 
         time_col1, time_col2 = st.columns(2)
         with time_col1:
-            final_start = compact_time_picker("Start", parsed_start, detected_start_str, "start")
+            final_start = compact_time_picker("Start", best_start, "start")
         with time_col2:
-            final_end = compact_time_picker("End", parsed_end, detected_end_str, "end")
+            final_end = compact_time_picker("End", best_end, "end")
 
         # --- ROW 4: LOCATION ---
-        l_col1, l_col2 = st.columns(2)
-        with l_col1:
-            loc_sel = st.selectbox("Detected Location", [manual_opt] + loc_candidates)
-        clean_loc = ""
-        if loc_sel != manual_opt and loc_sel != "":
-            clean_loc = loc_sel
-            loc_match = re.search(r'(?:location:)\s*([^\n]+)', loc_sel, re.IGNORECASE)
-            if loc_match:
-                clean_loc = loc_match.group(1).strip()
-        with l_col2:
-            final_location = st.text_input("Final Location", value=clean_loc)
+        final_location = st.text_input("Location", value=best_location)
 
-        # --- ROW 5: NOTES & SUBMIT ---
-        final_desc = st.text_area("Event Notes", value=text, height=68)
+        # --- ROW 5: NOTES (optional) ---
+        final_desc = st.text_area("Event Notes (optional)", value=text, height=68)
 
         if st.button("✅ Generate Link", use_container_width=True):
             base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
@@ -205,3 +231,108 @@ with col_form:
 
     elif st.session_state.show_mapping:
         st.warning("Please paste some text first.")
+
+# --- Rule-based fallback functions (copied from previous) ---
+def extract_title(text):
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    for line in lines:
+        lower = line.lower()
+        if re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)', lower):
+            continue
+        if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', lower):
+            continue
+        if re.search(r'(location|venue|room|building|street|ave|blvd)', lower):
+            continue
+        if len(line.split()) > 12:
+            continue
+        return line
+    return lines[0] if lines else ""
+
+def extract_date(text):
+    today = datetime.today().date()
+    year = today.year
+    patterns = [
+        r'(?i)(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})?',
+        r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*,?\s*(\d{4})?',
+        r'(\d{1,2})/(\d{1,2})/(\d{2,4})',
+        r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})',
+        r'(?i)(tomorrow|next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            groups = match.groups()
+            if len(groups) == 3:
+                if groups[0].isalpha():
+                    month_str = groups[0]
+                    day = int(groups[1])
+                    yr = int(groups[2]) if groups[2] else year
+                    month = datetime.strptime(month_str[:3], "%b").month
+                    try: return datetime(yr, month, day).date()
+                    except: pass
+                elif groups[1].isalpha():
+                    day = int(groups[0])
+                    month_str = groups[1]
+                    yr = int(groups[2]) if groups[2] else year
+                    month = datetime.strptime(month_str[:3], "%b").month
+                    try: return datetime(yr, month, day).date()
+                    except: pass
+                else:
+                    a, b, c = int(groups[0]), int(groups[1]), int(groups[2])
+                    if c < 100: c += 2000 if c < 70 else 1900
+                    if a <= 12 and b <= 31:
+                        try: return datetime(c, a, b).date()
+                        except: pass
+                    if b <= 12 and a <= 31:
+                        try: return datetime(c, b, a).date()
+                        except: pass
+            elif len(groups) == 1:
+                keyword = groups[0].lower()
+                if keyword == 'tomorrow':
+                    return today + timedelta(days=1)
+                if keyword.startswith('next '):
+                    day_name = keyword.split()[1]
+                    days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+                    target = days.index(day_name)
+                    today_weekday = today.weekday()
+                    diff = target - today_weekday
+                    if diff <= 0: diff += 7
+                    return today + timedelta(days=diff)
+    return None
+
+def extract_time_range(text):
+    match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', text, re.IGNORECASE)
+    if match:
+        def parse(t_str):
+            for fmt in ("%I:%M%p", "%I%p"):
+                try:
+                    return datetime.strptime(t_str.replace(" ", "").upper(), fmt).time()
+                except: continue
+            return None
+        start = parse(match.group(1))
+        end = parse(match.group(2))
+        if start and end: return start, end
+    match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', text, re.IGNORECASE)
+    if match:
+        t = parse(match.group(1))
+        if t:
+            end = (datetime.combine(datetime.today(), t) + timedelta(hours=1)).time()
+            return t, end
+    return None, None
+
+def extract_location(text):
+    patterns = [
+        r'(?i)(?:location|venue|room|address|where|place)\s*[:.]?\s*([^\n]+)',
+        r'(?i)at\s+([^\n,]+(?:street|st|ave|avenue|blvd|road|rd|building|room|suite|floor|nyc|new york))',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            loc = match.group(1).strip()
+            if len(loc) > 2: return loc
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    for line in lines:
+        lower = line.lower()
+        if re.search(r'\b(in|at)\s+[a-z]', lower) and len(line.split()) < 15:
+            return line
+    return ""
