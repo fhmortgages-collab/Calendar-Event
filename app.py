@@ -3,7 +3,7 @@ import re
 from datetime import datetime, time, timedelta
 from urllib.parse import quote
 
-# --- CANDIDATE EXTRACTION FUNCTIONS ---
+# --- IMPROVED EXTRACTION FUNCTIONS ---
 
 def get_title_candidates(text):
     """Return up to 3 candidate titles (short lines not date/time/location)."""
@@ -16,12 +16,43 @@ def get_title_candidates(text):
             continue
         if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', lower):
             continue
-        if re.search(r'(location|venue|room|building|street|ave|blvd|campus|floor)', lower):
+        if re.search(r'(location|venue|room|building|street|ave|blvd|campus|floor|hosted by|sponsored by)', lower):
             continue
         # Skip very long lines (likely descriptions)
         if len(line.split()) > 12:
             continue
         candidates.append(line)
+    # Remove duplicates and limit to 3
+    unique = list(dict.fromkeys(candidates))
+    return unique[:3] if unique else [""]
+
+def get_organization_candidates(text):
+    """Extract organization/company/host names."""
+    candidates = []
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
+    # Look for organization indicators
+    org_patterns = [
+        r'(?i)(?:hosted by|sponsored by|presented by|organized by|from|with)\s+([^\n,]+)',
+        r'(?i)([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:Inc|Corp|LLC|Ltd|Company|Co\.?|Corporation|Foundation|Agency|Group|Partners|Associates)',
+        r'(?i)([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:meeting|event|workshop|seminar|conference)',
+    ]
+    
+    for pattern in org_patterns:
+        matches = re.findall(pattern, text)
+        for m in matches:
+            org = m.strip()
+            if len(org) > 2 and len(org) < 50:
+                candidates.append(org)
+    
+    # Also check for capitalized phrases that might be companies
+    for line in lines:
+        # Look for "at [Company]" or "with [Company]"
+        if re.search(r'\b(at|with)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)', line):
+            match = re.search(r'\b(at|with)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)', line)
+            if match and len(match.group(2)) > 2:
+                candidates.append(match.group(2))
+    
     # Remove duplicates and limit to 3
     unique = list(dict.fromkeys(candidates))
     return unique[:3] if unique else [""]
@@ -41,10 +72,9 @@ def get_date_candidates(text):
     for pattern in patterns:
         matches = re.findall(pattern, text)
         for match in matches:
-            # match is a tuple of groups
             if isinstance(match, tuple):
                 if len(match) == 3:
-                    if match[0].isalpha():  # Month Day Year
+                    if match[0].isalpha():
                         month_str, day_str, year_str = match
                         day = int(day_str)
                         yr = int(year_str) if year_str else year
@@ -54,7 +84,7 @@ def get_date_candidates(text):
                             date_strings.append(dt.strftime("%B %d, %Y"))
                         except:
                             pass
-                    elif match[1].isalpha():  # Day Month Year
+                    elif match[1].isalpha():
                         day_str, month_str, year_str = match
                         day = int(day_str)
                         yr = int(year_str) if year_str else year
@@ -64,18 +94,16 @@ def get_date_candidates(text):
                             date_strings.append(dt.strftime("%B %d, %Y"))
                         except:
                             pass
-                    else:  # numeric
+                    else:
                         a, b, c = int(match[0]), int(match[1]), int(match[2])
                         if c < 100:
                             c += 2000 if c < 70 else 1900
-                        # Try MM/DD/YY
                         if a <= 12 and b <= 31:
                             try:
                                 dt = datetime(c, a, b).date()
                                 date_strings.append(dt.strftime("%B %d, %Y"))
                             except:
                                 pass
-                        # Try DD/MM/YY
                         if b <= 12 and a <= 31:
                             try:
                                 dt = datetime(c, b, a).date()
@@ -97,12 +125,11 @@ def get_date_candidates(text):
                             diff += 7
                         dt = today + timedelta(days=diff)
                         date_strings.append(dt.strftime("%B %d, %Y"))
-    # Remove duplicates and limit to 3
     unique = list(dict.fromkeys(date_strings))
     return unique[:3] if unique else [""]
 
 def get_time_candidates(text):
-    """Return up to 3 time range strings (e.g., '2:30 PM - 4:00 PM')."""
+    """Return up to 3 time range strings."""
     def parse(t_str):
         for fmt in ("%I:%M%p", "%I%p"):
             try:
@@ -111,7 +138,6 @@ def get_time_candidates(text):
                 continue
         return None
 
-    # Find all time ranges
     range_pattern = r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))'
     ranges = re.findall(range_pattern, text, re.IGNORECASE)
     time_strings = []
@@ -122,7 +148,6 @@ def get_time_candidates(text):
             start_fmt = start_t.strftime("%I:%M %p").lstrip("0")
             end_fmt = end_t.strftime("%I:%M %p").lstrip("0")
             time_strings.append(f"{start_fmt} - {end_fmt}")
-    # If no range, look for single times and assume 1 hour duration
     if not time_strings:
         single_pattern = r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))'
         singles = re.findall(single_pattern, text, re.IGNORECASE)
@@ -137,24 +162,39 @@ def get_time_candidates(text):
     return unique[:3] if unique else [""]
 
 def get_location_candidates(text):
-    """Return up to 3 location strings."""
-    patterns = [
-        r'(?i)(?:location|venue|room|address|where|place)\s*[:.]?\s*([^\n]+)',
-        r'(?i)at\s+([^\n,]+(?:street|st|ave|avenue|blvd|road|rd|building|room|suite|floor|nyc|new york))',
-    ]
+    """Extract location details (address, room, building, venue)."""
     candidates = []
+    
+    # Pattern 1: Explicit location indicators
+    patterns = [
+        r'(?i)(?:location|venue|room|address|where|place|at)\s*[:.]?\s*([^\n]+)',
+        r'(?i)(?:in|at)\s+([^\n,]+(?:street|st|ave|avenue|blvd|road|rd|building|room|suite|floor|hall|center|centre|theater|theatre|campus|nyc|new york))',
+        # Room numbers
+        r'(?i)(?:room|suite|floor|office)\s*[:.]?\s*([^\n]+)',
+        # Building names
+        r'(?i)([A-Z][a-zA-Z]+\s+(?:building|tower|plaza|center|centre|hall|house))',
+        # Full address with numbers
+        r'(\d{1,5}\s+[A-Za-z]+\s+(?:street|st|ave|avenue|road|rd|blvd|boulevard|drive|dr|lane|ln|way|plaza|square))',
+    ]
+    
     for pattern in patterns:
         matches = re.findall(pattern, text)
         for m in matches:
             loc = m.strip()
-            if len(loc) > 2:
+            if len(loc) > 2 and len(loc) < 100:
+                # Clean up
+                loc = re.sub(r'\s+', ' ', loc)
                 candidates.append(loc)
-    # Also consider lines that contain "in" or "at" and are short
+    
+    # Also get any line that contains "in" or "at" and a place name
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     for line in lines:
         lower = line.lower()
         if re.search(r'\b(in|at)\s+[a-z]', lower) and len(line.split()) < 15:
-            candidates.append(line)
+            # Skip if it looks like a time
+            if not re.search(r'\d{1,2}:\d{2}', line):
+                candidates.append(line)
+    
     # Remove duplicates and limit to 3
     unique = list(dict.fromkeys(candidates))
     return unique[:3] if unique else [""]
@@ -167,9 +207,10 @@ if 'show_mapping' not in st.session_state:
     st.session_state.show_mapping = False
 if 'event_text' not in st.session_state:
     st.session_state.event_text = ""
-# We'll store selected values to persist across reruns
 if 'final_title' not in st.session_state:
     st.session_state.final_title = ""
+if 'final_organization' not in st.session_state:
+    st.session_state.final_organization = ""
 if 'final_date' not in st.session_state:
     st.session_state.final_date = datetime.today().date()
 if 'final_start' not in st.session_state:
@@ -183,6 +224,7 @@ def clear_all():
     st.session_state.show_mapping = False
     st.session_state.event_text = ""
     st.session_state.final_title = ""
+    st.session_state.final_organization = ""
     st.session_state.final_date = datetime.today().date()
     st.session_state.final_start = time(9, 0)
     st.session_state.final_end = time(10, 0)
@@ -199,7 +241,7 @@ with col_input:
         "Paste your event text here",
         value=st.session_state.event_text,
         height=180,
-        placeholder="e.g. Meeting on Friday at 2pm, Room 101 ..."
+        placeholder="e.g. Acme Corp Quarterly Meeting at 2pm in Conference Room 101"
     )
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
@@ -225,12 +267,14 @@ with col_form:
 
         # --- Get candidates ---
         title_candidates = get_title_candidates(text)
+        org_candidates = get_organization_candidates(text)
         date_candidates = get_date_candidates(text)
         time_candidates = get_time_candidates(text)
         location_candidates = get_location_candidates(text)
 
         # Set default best (first candidate) if available, else empty
         best_title = title_candidates[0] if title_candidates and title_candidates[0] else ""
+        best_org = org_candidates[0] if org_candidates and org_candidates[0] else ""
         best_date_str = date_candidates[0] if date_candidates and date_candidates[0] else ""
         best_time_str = time_candidates[0] if time_candidates and time_candidates[0] else ""
         best_location = location_candidates[0] if location_candidates and location_candidates[0] else ""
@@ -246,7 +290,6 @@ with col_form:
 
         # Parse best time range into start/end
         if best_time_str:
-            # try to split
             parts = re.split(r'\s*-\s*', best_time_str)
             if len(parts) == 2:
                 def parse_time_str(t):
@@ -272,9 +315,11 @@ with col_form:
             best_end = time(10, 0)
 
         # Update session state with these bests (if not already set)
-        if not st.session_state.final_title and best_title:
+        if best_title and not st.session_state.final_title:
             st.session_state.final_title = best_title
-        if not st.session_state.final_location and best_location:
+        if best_org and not st.session_state.final_organization:
+            st.session_state.final_organization = best_org
+        if best_location and not st.session_state.final_location:
             st.session_state.final_location = best_location
 
         st.markdown("### 📝 Verify & Map Details")
@@ -282,46 +327,56 @@ with col_form:
 
         # --- TITLE ---
         title_options = title_candidates + [manual_opt]
-        # selectbox index: if current final_title is in candidates, use its index; else use last (manual)
         if st.session_state.final_title in title_candidates:
             title_idx = title_candidates.index(st.session_state.final_title)
         else:
-            title_idx = len(title_candidates)  # manual option
+            title_idx = len(title_candidates)
         title_sel = st.selectbox(
-            "Select Event Name",
+            "Event Name",
             title_options,
             index=title_idx,
             key="title_select"
         )
         if title_sel == manual_opt:
-            # user wants to type manually
             final_title = st.text_input("Event Name (manual)", value=st.session_state.final_title)
         else:
             final_title = title_sel
-        # update session state
         st.session_state.final_title = final_title
+
+        # --- ORGANIZATION (NEW!) ---
+        org_options = org_candidates + [manual_opt]
+        if st.session_state.final_organization in org_candidates:
+            org_idx = org_candidates.index(st.session_state.final_organization)
+        else:
+            org_idx = len(org_candidates)
+        org_sel = st.selectbox(
+            "Organization / Host",
+            org_options,
+            index=org_idx,
+            key="org_select"
+        )
+        if org_sel == manual_opt:
+            final_organization = st.text_input("Organization (manual)", value=st.session_state.final_organization)
+        else:
+            final_organization = org_sel
+        st.session_state.final_organization = final_organization
 
         # --- DATE ---
         date_options = date_candidates + [manual_opt]
-        # Convert date candidates to strings for comparison
-        date_strs = date_candidates
-        # Find index of current final_date (formatted as string)
         current_date_str = st.session_state.final_date.strftime("%B %d, %Y")
-        if current_date_str in date_strs:
-            date_idx = date_strs.index(current_date_str)
+        if current_date_str in date_candidates:
+            date_idx = date_candidates.index(current_date_str)
         else:
-            date_idx = len(date_strs)
+            date_idx = len(date_candidates)
         date_sel = st.selectbox(
-            "Select Date",
+            "Date",
             date_options,
             index=date_idx,
             key="date_select"
         )
         if date_sel == manual_opt:
-            # manual date input
             final_date = st.date_input("Date (manual)", value=st.session_state.final_date)
         else:
-            # parse the selected date string
             try:
                 final_date = datetime.strptime(date_sel, "%B %d, %Y").date()
             except:
@@ -330,7 +385,6 @@ with col_form:
 
         # --- TIME ---
         time_options = time_candidates + [manual_opt]
-        # Find index of current time range (format "HH:MM AM - HH:MM PM")
         def format_time_range(start, end):
             return f"{start.strftime('%I:%M %p').lstrip('0')} - {end.strftime('%I:%M %p').lstrip('0')}"
         current_time_str = format_time_range(st.session_state.final_start, st.session_state.final_end)
@@ -339,13 +393,12 @@ with col_form:
         else:
             time_idx = len(time_candidates)
         time_sel = st.selectbox(
-            "Select Time Range",
+            "Time Range",
             time_options,
             index=time_idx,
             key="time_select"
         )
         if time_sel == manual_opt:
-            # Show compact time picker for manual adjustment
             st.markdown("**Adjust times manually**")
             def compact_time_picker(label, default_time, key_prefix):
                 hour_12 = default_time.hour % 12
@@ -389,7 +442,6 @@ with col_form:
             with time_col2:
                 final_end = compact_time_picker("End", st.session_state.final_end, "manual_end")
         else:
-            # Parse selected time range
             parts = re.split(r'\s*-\s*', time_sel)
             if len(parts) == 2:
                 def parse_time_str(t):
@@ -413,14 +465,14 @@ with col_form:
         st.session_state.final_start = final_start
         st.session_state.final_end = final_end
 
-        # --- LOCATION ---
+        # --- LOCATION (IMPROVED!) ---
         location_options = location_candidates + [manual_opt]
         if st.session_state.final_location in location_candidates:
             loc_idx = location_candidates.index(st.session_state.final_location)
         else:
             loc_idx = len(location_candidates)
         loc_sel = st.selectbox(
-            "Select Location",
+            "Location",
             location_options,
             index=loc_idx,
             key="location_select"
@@ -436,8 +488,13 @@ with col_form:
 
         # --- GENERATE LINK ---
         if st.button("✅ Generate Link", use_container_width=True):
+            # Combine title and organization for the calendar title
+            calendar_title = final_title
+            if final_organization and final_organization not in final_title:
+                calendar_title = f"{final_title} ({final_organization})"
+            
             base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
-            encoded_title = quote(final_title)
+            encoded_title = quote(calendar_title)
             encoded_location = quote(final_location)
             encoded_desc = quote(final_desc)
             date_formatted = final_date.strftime("%Y%m%d")
