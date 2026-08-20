@@ -25,13 +25,56 @@ def clear_all():
     st.session_state.uploaded_bytes = None
     st.session_state.input_method = "Upload PDF"
 
+# --- Helper: Custom time picker with dropdowns ---
+def custom_time_picker(label, default_time, key_prefix):
+    """
+    Returns a time object from three dropdowns: hour (1-12), minute (00-59), AM/PM.
+    """
+    if default_time is None:
+        default_time = time(9, 0)
+    # Convert to 12-hour format
+    hour_12 = default_time.hour % 12
+    if hour_12 == 0:
+        hour_12 = 12
+    minute = default_time.minute
+    am_pm = "AM" if default_time.hour < 12 else "PM"
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        hour = st.selectbox(
+            f"{label} – Hour",
+            options=list(range(1, 13)),
+            index=hour_12 - 1,
+            key=f"{key_prefix}_hour"
+        )
+    with col2:
+        minute = st.selectbox(
+            "Minute",
+            options=[f"{i:02d}" for i in range(0, 60, 5)],  # 5‑minute increments for simplicity
+            index=minute // 5,
+            key=f"{key_prefix}_minute"
+        )
+    with col3:
+        am_pm = st.selectbox(
+            "AM/PM",
+            options=["AM", "PM"],
+            index=0 if am_pm == "AM" else 1,
+            key=f"{key_prefix}_ampm"
+        )
+    # Convert to 24-hour
+    hour_24 = hour if am_pm == "AM" else hour + 12
+    if hour_24 == 12 and am_pm == "AM":
+        hour_24 = 0
+    if hour_24 == 24:
+        hour_24 = 12
+    return time(hour_24, int(minute))
+
 # --- MAIN LAYOUT ---
 st.title("📅 Compact Event Parser")
 
 col_input, col_form = st.columns([1, 1.3], gap="small")
 
 with col_input:
-    # Dropdown
     input_method = st.selectbox(
         "Input Method",
         ["Upload PDF", "Upload Image", "Paste Text"],
@@ -45,9 +88,7 @@ with col_input:
     if input_method == "Upload PDF":
         uploaded_file = st.file_uploader("Upload PDF", type=["pdf"], key="pdf_uploader")
         if uploaded_file is not None:
-            # Store the bytes so we can use them later if needed
             st.session_state.uploaded_bytes = uploaded_file.read()
-            # Extract text
             try:
                 doc = fitz.open(stream=st.session_state.uploaded_bytes, filetype="pdf")
                 raw_text = ""
@@ -55,7 +96,6 @@ with col_input:
                     raw_text += page.get_text() + "\n"
                 raw_text = raw_text.strip()
 
-                # If no text, try OCR
                 if not raw_text:
                     with st.spinner("OCR scanning PDF pages..."):
                         ocr_text = ""
@@ -89,7 +129,6 @@ with col_input:
             except Exception as e:
                 st.error(f"Image error: {e}")
 
-    # Text area – always shows session state
     raw_text = st.text_area(
         "Event Details Text",
         value=st.session_state.event_text,
@@ -97,11 +136,9 @@ with col_input:
         placeholder="Event text will appear here...",
         key="event_text_area"
     )
-    # If user manually edits, update session state
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
 
-    # Debug expander
     with st.expander("🔍 Debug info"):
         st.write(f"Session text length: {len(st.session_state.event_text)} characters")
         if st.session_state.event_text:
@@ -109,7 +146,6 @@ with col_input:
         else:
             st.info("No text in session state.")
 
-    # Buttons
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
@@ -121,9 +157,8 @@ with col_input:
     with c2:
         if st.button("🗑️ Clear / Reset", use_container_width=True):
             clear_all()
-            st.rerun()  # Force refresh
+            st.rerun()
 
-    # Auto-show mapping if text exists
     if st.session_state.event_text.strip():
         st.session_state.show_mapping = True
 
@@ -174,12 +209,15 @@ with col_form:
                 except ValueError: pass
         with d_col2: final_date = st.date_input("Final Date", value=parsed_date)
 
-        # --- ROW 3: TIME ---
-        tm_col1, tm_col2, tm_col3 = st.columns([2, 1, 1])
-        with tm_col1: time_sel = st.selectbox("Detected Time", [manual_opt] + time_candidates)
+        # --- ROW 3: TIME (CUSTOM PICKER) ---
+        st.markdown("**Event Time**")
+        # Parse detected time to get default start/end
         parsed_start, parsed_end = time(9, 0), time(10, 0)
-        if time_sel != manual_opt and time_sel != "":
-            time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', time_sel, re.IGNORECASE)
+
+        # Try to parse from detected time line
+        if time_candidates and time_candidates[0] != "":
+            time_line = time_candidates[0]
+            time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', time_line, re.IGNORECASE)
             def parse_time(t_str):
                 for fmt in ("%I:%M%p", "%I%p"):
                     try: return datetime.strptime(t_str.replace(" ", "").upper(), fmt).time()
@@ -190,8 +228,15 @@ with col_form:
                 e_time = parse_time(time_range_match.group(2))
                 if s_time: parsed_start = s_time
                 if e_time: parsed_end = e_time
-        with tm_col2: final_start = st.time_input("Start Time", value=parsed_start)
-        with tm_col3: final_end = st.time_input("End Time", value=parsed_end)
+
+        # Use custom pickers
+        col_start, col_end = st.columns(2)
+        with col_start:
+            st.write("**Start**")
+            final_start = custom_time_picker("Start", parsed_start, "start_time")
+        with col_end:
+            st.write("**End**")
+            final_end = custom_time_picker("End", parsed_end, "end_time")
 
         # --- ROW 4: LOCATION ---
         l_col1, l_col2 = st.columns(2)
