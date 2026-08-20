@@ -2,10 +2,9 @@ import streamlit as st
 import re
 from datetime import datetime, time
 from urllib.parse import quote
-import pdfplumber
+import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
-from pdf2image import convert_from_bytes
 
 # Page Configuration
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
@@ -37,18 +36,11 @@ with col_input:
         uploaded_file = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed", key=f"pdf_{st.session_state.widget_key}")
         if uploaded_file:
             try:
-                file_bytes = uploaded_file.read()
+                # UPGRADED: PyMuPDF is much stronger for web-generated PDFs
+                doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
                 raw_pdf_text = ""
-                with pdfplumber.open(uploaded_file) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text: raw_pdf_text += page_text + "\n"
-                
-                if not raw_pdf_text.strip():
-                    with st.spinner("Scanning image-based PDF..."):
-                        images = convert_from_bytes(file_bytes)
-                        for img in images:
-                            raw_pdf_text += pytesseract.image_to_string(img) + "\n"
+                for page in doc:
+                    raw_pdf_text += page.get_text() + "\n"
                 
                 extracted_text = "\n".join([line.strip() for line in raw_pdf_text.split('\n') if line.strip()])
             except Exception as e:
@@ -94,7 +86,7 @@ with col_form:
         st.markdown("### 📝 Verify & Map Details")
         manual_opt = "Other (Manual Entry)"
         
-        # --- ROW 1: TITLE ---
+        # --- ROW 1: EVENT NAME ---
         t_col1, t_col2 = st.columns(2)
         with t_col1: title_sel = st.selectbox("Detected Event Name", [manual_opt] + title_candidates)
         with t_col2: final_title = st.text_input("Final Event Name", value=title_sel if title_sel != manual_opt else "")
