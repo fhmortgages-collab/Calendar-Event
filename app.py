@@ -30,11 +30,9 @@ with col_input:
         placeholder="e.g. Meeting on Friday at 2pm, Room 101 ...",
         key="event_text_area"
     )
-    # Update session state on change
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
 
-    # Buttons
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
@@ -48,7 +46,6 @@ with col_input:
             clear_all()
             st.rerun()
 
-    # Auto-show if text exists
     if st.session_state.event_text.strip():
         st.session_state.show_mapping = True
 
@@ -104,10 +101,13 @@ with col_form:
         with d_col2:
             final_date = st.date_input("Final Date", value=parsed_date)
 
-        # --- ROW 3: TIME (COMPACT) ---
+        # --- ROW 3: TIME (DETECTED + COMPACT PICKER) ---
         st.markdown("**Event Time**")
-        # Parse detected time for default
+        # Parse detected times
         parsed_start, parsed_end = time(9, 0), time(10, 0)
+        detected_start_str = "Not detected"
+        detected_end_str = "Not detected"
+
         if time_candidates and time_candidates[0] != "":
             time_line = time_candidates[0]
             time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', time_line, re.IGNORECASE)
@@ -121,17 +121,25 @@ with col_form:
             if time_range_match:
                 s_time = parse_time(time_range_match.group(1))
                 e_time = parse_time(time_range_match.group(2))
-                if s_time: parsed_start = s_time
-                if e_time: parsed_end = e_time
+                if s_time:
+                    parsed_start = s_time
+                    detected_start_str = s_time.strftime("%I:%M %p")
+                if e_time:
+                    parsed_end = e_time
+                    detected_end_str = e_time.strftime("%I:%M %p")
 
-        # Compact time picker function (all in one row)
-        def compact_time_picker(label, default_time, key_prefix):
+        # Compact time picker with detected label
+        def compact_time_picker(label, default_time, detected_str, key_prefix):
             # Convert default to hour (12h), minute, am/pm
             hour_12 = default_time.hour % 12
             if hour_12 == 0: hour_12 = 12
             minute = default_time.minute
             am_pm = "AM" if default_time.hour < 12 else "PM"
 
+            # Show detected time as a label
+            st.write(f"**Detected {label}:** {detected_str}")
+
+            # Dropdowns (compact, labels collapsed)
             cols = st.columns([1, 1, 1, 0.2])  # last is spacer
             with cols[0]:
                 hour = st.selectbox(
@@ -168,11 +176,9 @@ with col_form:
         # Start and End times side‑by‑side
         time_col1, time_col2 = st.columns(2)
         with time_col1:
-            st.write("**Start**")
-            final_start = compact_time_picker("Start", parsed_start, "start")
+            final_start = compact_time_picker("Start", parsed_start, detected_start_str, "start")
         with time_col2:
-            st.write("**End**")
-            final_end = compact_time_picker("End", parsed_end, "end")
+            final_end = compact_time_picker("End", parsed_end, detected_end_str, "end")
 
         # --- ROW 4: LOCATION ---
         l_col1, l_col2 = st.columns(2)
