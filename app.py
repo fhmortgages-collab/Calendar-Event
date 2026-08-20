@@ -8,7 +8,7 @@ from pypdf import PdfReader
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="centered")
 
 st.title("📅 Event Text & PDF Parser")
-st.markdown("Extract event details and map them to calendar fields using dropdowns.")
+st.markdown("Smart extraction maps specific details to the correct calendar fields.")
 
 # --- STEP 1: INPUT & EXTRACTION ---
 input_method = st.radio("Select Input Method:", ["Upload PDF File", "Paste Text Manually"])
@@ -42,28 +42,57 @@ raw_text = st.text_area(
     placeholder="Paste event text here or upload a PDF above..."
 )
 
-# Extract lines to create dropdown candidates
-candidates = ["[Manual Entry]"]
+# --- SMART FILTERING LOGIC ---
+all_lines = ["[Manual Entry]"]
+title_candidates = ["[Manual Entry]"]
+date_candidates = ["[Manual Entry]"]
+time_candidates = ["[Manual Entry]"]
+loc_candidates = ["[Manual Entry]"]
+
 if raw_text.strip():
     extracted_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
-    candidates.extend(extracted_lines)
+    all_lines.extend(extracted_lines)
+    
+    for line in extracted_lines:
+        lower_line = line.lower()
+        
+        # 1. Date Filter (Months, Days of week)
+        if re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|aug|sep|oct|nov|dec|monday|tuesday|wednesday|thursday|friday|saturday|sunday)', lower_line):
+            date_candidates.append(line)
+            
+        # 2. Time Filter (AM/PM or formatted time)
+        if re.search(r'(\d{1,2}(?::\d{2})?\s*(?:am|pm))', lower_line):
+            time_candidates.append(line)
+            
+        # 3. Location Filter (Addresses, Location labels, Campus)
+        if re.search(r'(location:|street|st|ave|avenue|blvd|campus|new york|ny|room)', lower_line) or re.search(r'\d+\s+[a-z]+', lower_line):
+            loc_candidates.append(line)
+            
+        # 4. Title Filter (Keep it relatively short, ignore obvious URLs or purely numbers)
+        if len(line.split()) < 15 and not line.startswith("http"):
+            title_candidates.append(line)
+
+# Fallbacks: If a smart filter found nothing, give it all the lines just in case
+if len(date_candidates) == 1: date_candidates = all_lines
+if len(time_candidates) == 1: time_candidates = all_lines
+if len(loc_candidates) == 1: loc_candidates = all_lines
+if len(title_candidates) == 1: title_candidates = all_lines
+
 
 st.markdown("---")
-st.markdown("### 📝 Map Extracted Data to Calendar Fields")
-st.markdown("Select the extracted line that corresponds to each field, or select **[Manual Entry]** to type it yourself.")
+st.markdown("### 📝 Verify & Edit Details")
 
-with st.form("event_mapping_form"): # All of this is enclosed in a form
+with st.form("event_mapping_form"): 
     
     # --- TITLE ---
     st.subheader("Event Title")
-    title_selection = st.selectbox("Select Title from text:", candidates, key="sel_title")
+    title_selection = st.selectbox("Detected Titles:", title_candidates, key="sel_title")
     final_title = st.text_input("Confirm/Manual Title Entry", value=title_selection if title_selection != "[Manual Entry]" else "")
     
     # --- DATE ---
     st.subheader("Date")
-    date_selection = st.selectbox("Select Date from text:", candidates, key="sel_date")
+    date_selection = st.selectbox("Detected Dates:", date_candidates, key="sel_date")
     
-    # Try to parse the selected date line
     parsed_date = datetime.today().date()
     if date_selection != "[Manual Entry]":
         current_year = datetime.now().year
@@ -75,13 +104,12 @@ with st.form("event_mapping_form"): # All of this is enclosed in a form
             except ValueError:
                 pass
     
-    final_date = st.date_input("Confirm/Manual Date Entry", value=parsed_date) # Creates a date widget
+    final_date = st.date_input("Confirm/Manual Date Entry", value=parsed_date)
     
     # --- TIME ---
     st.subheader("Time")
-    time_selection = st.selectbox("Select Time from text:", candidates, key="sel_time")
+    time_selection = st.selectbox("Detected Times:", time_candidates, key="sel_time")
     
-    # Try to parse the selected time line
     parsed_start, parsed_end = time(9, 0), time(10, 0)
     if time_selection != "[Manual Entry]":
         time_range_match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', time_selection, re.IGNORECASE)
@@ -108,9 +136,8 @@ with st.form("event_mapping_form"): # All of this is enclosed in a form
         
     # --- LOCATION ---
     st.subheader("Location")
-    loc_selection = st.selectbox("Select Location from text:", candidates, key="sel_loc")
+    loc_selection = st.selectbox("Detected Locations:", loc_candidates, key="sel_loc")
     
-    # Attempt to clean up the location line if a label is in it (e.g. "Location: 123 Main St")
     clean_loc = loc_selection
     if loc_selection != "[Manual Entry]":
         loc_label_match = re.search(r'(?:location:)\s*([^\n]+)', loc_selection, re.IGNORECASE)
@@ -121,21 +148,12 @@ with st.form("event_mapping_form"): # All of this is enclosed in a form
     
     # --- DESCRIPTION ---
     st.subheader("Description / Notes")
-    desc_selection = st.selectbox("Select Notes from text (or choose Full Text):", candidates + ["Use Full Text"], index=len(candidates))
-    
-    desc_val = ""
-    if desc_selection == "Use Full Text":
-        desc_val = raw_text
-    elif desc_selection != "[Manual Entry]":
-        desc_val = desc_selection
-        
-    final_desc = st.text_area("Confirm/Manual Notes Entry", value=desc_val, height=100) # Creates a text area widget
+    final_desc = st.text_area("Event Notes", value=raw_text, height=120) 
     
     # --- SUBMIT ---
-    submitted = st.form_submit_button("✅ Confirm & Create Calendar Link") # Submit button
+    submitted = st.form_submit_button("✅ Confirm & Create Calendar Link")
 
 if submitted:
-    # Build the URL using the confirmed form data
     base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
     encoded_title = quote(final_title)
     encoded_location = quote(final_location)
