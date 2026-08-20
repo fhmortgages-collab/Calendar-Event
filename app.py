@@ -5,8 +5,9 @@ from urllib.parse import quote
 import pdfplumber
 from PIL import Image
 import pytesseract
+from pdf2image import convert_from_bytes
 
-# Page Configuration - Set to WIDE layout
+# Page Configuration
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
 
 # --- SESSION STATE MANAGEMENT ---
@@ -31,7 +32,6 @@ st.title("📅 Event Text, PDF & Image Parser")
 col_input, col_form = st.columns([1, 1.2], gap="large")
 
 with col_input:
-    # ADDED: Image upload option
     input_method = st.radio("Input Method:", ["Upload PDF", "Upload Image", "Paste Text"], horizontal=True, key=f"radio_{st.session_state.widget_key}")
     
     extracted_text = ""
@@ -40,25 +40,39 @@ with col_input:
         uploaded_file = st.file_uploader("Upload PDF:", type=["pdf"], key=f"pdf_{st.session_state.widget_key}")
         if uploaded_file:
             try:
+                # Read the file into memory
+                file_bytes = uploaded_file.read()
+                
+                # 1. Try standard digital text extraction first
+                raw_pdf_text = ""
                 with pdfplumber.open(uploaded_file) as pdf:
-                    raw_pdf_text = ""
                     for page in pdf.pages:
                         page_text = page.extract_text()
                         if page_text:
                             raw_pdf_text += page_text + "\n"
                 
+                # 2. If standard extraction found nothing, it's an image-PDF. Trigger OCR.
+                if not raw_pdf_text.strip():
+                    with st.spinner("Image-based PDF detected. Scanning with OCR..."):
+                        # Convert PDF pages to images
+                        images = convert_from_bytes(file_bytes)
+                        for img in images:
+                            # Run the image scanner on each page
+                            raw_pdf_text += pytesseract.image_to_string(img) + "\n"
+                
                 filtered_lines = [line.strip() for line in raw_pdf_text.split('\n') if line.strip()]
                 extracted_text = "\n".join(filtered_lines)
+                
             except Exception as e:
-                st.error(f"Error extracting text: {str(e)}")
+                st.error(f"Error extracting text from PDF: {str(e)}")
                 
     elif input_method == "Upload Image":
         uploaded_image = st.file_uploader("Upload Image:", type=["png", "jpg", "jpeg"], key=f"img_{st.session_state.widget_key}")
         if uploaded_image:
             try:
                 image = Image.open(uploaded_image)
-                # ADDED: Tesseract processes the image into text
-                raw_img_text = pytesseract.image_to_string(image)
+                with st.spinner("Scanning image..."):
+                    raw_img_text = pytesseract.image_to_string(image)
                 filtered_lines = [line.strip() for line in raw_img_text.split('\n') if line.strip()]
                 extracted_text = "\n".join(filtered_lines)
                 st.image(image, caption="Uploaded Image", use_container_width=True)
@@ -111,7 +125,6 @@ with col_form:
         
         st.markdown("### 📝 Verify & Map Details")
         
-        # ADDED: "Other" option appended to the top of all dropdowns
         manual_opt = "Other (Manual Entry)"
         
         # --- TITLE ---
@@ -161,7 +174,6 @@ with col_form:
                 if e_time: parsed_end = e_time
 
         with tm_col2: 
-            # Click inside this box to see the clock icon
             final_start = st.time_input("Start:", value=parsed_start)
         with tm_col3: 
             final_end = st.time_input("End:", value=parsed_end)
@@ -178,14 +190,13 @@ with col_form:
             if loc_label_match: clean_loc = loc_label_match.group(1).strip()
                 
         with l_col2: 
-            final_location = st.text_input("Final Location (Autocomplete via browser):", value=clean_loc)
+            final_location = st.text_input("Final Location:", value=clean_loc)
         
         # --- DESCRIPTION & SUBMIT ---
         final_desc = st.text_area("Notes:", value=raw_text, height=68) 
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # We use a standard button here instead of a form submit
         if st.button("✅ Generate Calendar Link", use_container_width=True):
             base_cal_url = "https://calendar.google.com/calendar/render?action=TEMPLATE"
             encoded_title = quote(final_title)
