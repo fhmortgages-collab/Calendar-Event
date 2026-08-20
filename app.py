@@ -15,9 +15,6 @@ if 'show_mapping' not in st.session_state:
 if 'widget_key' not in st.session_state:
     st.session_state.widget_key = 0
 
-def extract_action():
-    st.session_state.show_mapping = True
-
 def clear_all_action():
     st.session_state.show_mapping = False
     st.session_state.widget_key += 1 
@@ -36,15 +33,26 @@ with col_input:
         uploaded_file = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed", key=f"pdf_{st.session_state.widget_key}")
         if uploaded_file:
             try:
-                # UPGRADED: PyMuPDF is much stronger for web-generated PDFs
                 doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
                 raw_pdf_text = ""
                 for page in doc:
                     raw_pdf_text += page.get_text() + "\n"
+                raw_pdf_text = raw_pdf_text.strip()
+                
+                # If no text was extracted, fallback to OCR on each page
+                if not raw_pdf_text:
+                    with st.spinner("OCR scanning PDF pages..."):
+                        ocr_text = ""
+                        for page_num in range(len(doc)):
+                            page = doc.load_page(page_num)
+                            pix = page.get_pixmap()
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            ocr_text += pytesseract.image_to_string(img) + "\n"
+                        raw_pdf_text = ocr_text.strip()
                 
                 extracted_text = "\n".join([line.strip() for line in raw_pdf_text.split('\n') if line.strip()])
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"PDF processing error: {str(e)}")
                 
     elif input_method == "Upload Image":
         uploaded_image = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"], label_visibility="collapsed", key=f"img_{st.session_state.widget_key}")
@@ -59,9 +67,19 @@ with col_input:
 
     raw_text = st.text_area("Event Details Text", value=extracted_text, height=180, placeholder="Event text will appear here...", key=f"text_{st.session_state.widget_key}")
 
+    # If we successfully extracted text from file, show mapping automatically
+    if extracted_text.strip():
+        st.session_state.show_mapping = True
+
     c1, c2 = st.columns(2)
-    with c1: st.button("🔍 Extract Info", on_click=extract_action, use_container_width=True, type="primary")
-    with c2: st.button("🗑️ Clear / Reset", on_click=clear_all_action, use_container_width=True)
+    with c1:
+        if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
+            if raw_text.strip():
+                st.session_state.show_mapping = True
+            else:
+                st.warning("No text to process. Please upload a file or enter text.")
+    with c2:
+        st.button("🗑️ Clear / Reset", on_click=clear_all_action, use_container_width=True)
 
 with col_form:
     if st.session_state.show_mapping and raw_text.strip():
