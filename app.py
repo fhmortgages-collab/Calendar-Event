@@ -8,7 +8,6 @@ from pypdf import PdfReader
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
 
 # --- SESSION STATE MANAGEMENT ---
-# This keeps track of our buttons so the app remembers what to show
 if 'show_form' not in st.session_state:
     st.session_state.show_form = False
 if 'widget_key' not in st.session_state:
@@ -22,7 +21,6 @@ def reset_fields_action():
 
 def clear_all_action():
     st.session_state.show_form = False
-    # Incrementing this key forces Streamlit to completely wipe the file uploader and text area widgets
     st.session_state.widget_key += 1 
 
 # --- MAIN LAYOUT ---
@@ -45,11 +43,8 @@ with col_input:
                     if page_text:
                         raw_pdf_text += page_text + "\n"
                 
-                filtered_lines = [
-                    line.strip() for line in raw_pdf_text.split('\n') 
-                    if line.strip() and not any(noise in line.lower() for noise in ["http://", "https://", "page ", "mail.google.com"])
-                    and not re.match(r'^\d{1,2}/\d{1,2}/\d{2},?\s*\d{1,2}:\d{2}', line.strip())
-                ]
+                # REVISED: Simple filter that just removes blank lines so it doesn't accidentally delete email PDF text
+                filtered_lines = [line.strip() for line in raw_pdf_text.split('\n') if line.strip()]
                 extracted_text = "\n".join(filtered_lines)
             except Exception as e:
                 st.error(f"Error: {str(e)}")
