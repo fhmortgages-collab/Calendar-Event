@@ -2,17 +2,10 @@ import streamlit as st
 import re
 from datetime import datetime, time, timedelta
 from urllib.parse import quote
-import json
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-
-# --- HELPER FUNCTIONS (defined first!) ---
+# --- HELPER FUNCTIONS (rule-based extraction) ---
 
 def extract_title(text):
-    """Rule-based title extraction (fallback)"""
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     for line in lines:
         lower = line.lower()
@@ -28,7 +21,6 @@ def extract_title(text):
     return lines[0] if lines else ""
 
 def extract_date(text):
-    """Rule-based date extraction (fallback)"""
     today = datetime.today().date()
     year = today.year
     patterns = [
@@ -91,7 +83,6 @@ def extract_date(text):
     return None
 
 def extract_time_range(text):
-    """Rule-based time range extraction (fallback)"""
     match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', text, re.IGNORECASE)
     if match:
         def parse(t_str):
@@ -121,7 +112,6 @@ def extract_time_range(text):
     return None, None
 
 def extract_location(text):
-    """Rule-based location extraction (fallback)"""
     patterns = [
         r'(?i)(?:location|venue|room|address|where|place)\s*[:.]?\s*([^\n]+)',
         r'(?i)at\s+([^\n,]+(?:street|st|ave|avenue|blvd|road|rd|building|room|suite|floor|nyc|new york))',
@@ -139,7 +129,7 @@ def extract_location(text):
             return line
     return ""
 
-# --- Page Configuration ---
+# --- Page Config ---
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
 
 # --- Session State ---
@@ -147,85 +137,10 @@ if 'show_mapping' not in st.session_state:
     st.session_state.show_mapping = False
 if 'event_text' not in st.session_state:
     st.session_state.event_text = ""
-if 'ai_parsed' not in st.session_state:
-    st.session_state.ai_parsed = None
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = ""
-if 'model' not in st.session_state:
-    st.session_state.model = None
 
 def clear_all():
     st.session_state.show_mapping = False
     st.session_state.event_text = ""
-    st.session_state.ai_parsed = None
-
-# --- Sidebar for API Key ---
-with st.sidebar:
-    st.markdown("## 🔑 Gemini API Key (optional)")
-    st.markdown("Get a free key from [Google AI Studio](https://aistudio.google.com/apikey)")
-    api_key_input = st.text_input(
-        "Enter your API key",
-        type="password",
-        value=st.session_state.api_key,
-        help="Leave blank for rule‑based extraction (no AI)."
-    )
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
-        if api_key_input and genai:
-            try:
-                genai.configure(api_key=api_key_input)
-                st.session_state.model = genai.GenerativeModel('gemini-2.0-flash-exp')
-                st.success("✅ AI model ready!")
-            except Exception as e:
-                st.error(f"Invalid key: {e}")
-                st.session_state.model = None
-        else:
-            st.session_state.model = None
-
-# --- AI Parsing Function (uses the model from session) ---
-def parse_with_ai(text):
-    if not st.session_state.model:
-        return None
-    prompt = f"""
-You are an expert calendar assistant. Extract event details from the following text.
-Return ONLY a valid JSON object with these exact keys:
-- "title" (string)
-- "date" (string in YYYY-MM-DD format)
-- "start_time" (string in HH:MM AM/PM format, e.g. "02:30 PM")
-- "end_time" (string in HH:MM AM/PM format)
-- "location" (string)
-
-If a piece of information is missing, use an empty string "".
-
-Text:
-{text}
-"""
-    try:
-        response = st.session_state.model.generate_content(prompt)
-        json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
-        return json.loads(json_str)
-    except Exception as e:
-        st.error(f"AI parsing error: {e}")
-        return None
-
-def parse_time_from_ai(t_str):
-    if not t_str:
-        return None
-    t_str = t_str.strip().upper()
-    for fmt in ("%I:%M %p", "%I%p", "%I:%M%p"):
-        try:
-            return datetime.strptime(t_str.replace(" ", ""), fmt).time()
-        except:
-            continue
-    return None
-
-def parse_date_from_ai(d_str):
-    if not d_str:
-        return None
-    try:
-        return datetime.strptime(d_str, "%Y-%m-%d").date()
-    except:
-        return None
 
 # --- MAIN LAYOUT ---
 st.title("📅 Compact Event Parser")
@@ -242,52 +157,32 @@ with col_input:
     )
     if raw_text != st.session_state.event_text:
         st.session_state.event_text = raw_text
-        st.session_state.ai_parsed = None
+        # When text changes, automatically extract and show mapping
+        if raw_text.strip():
+            st.session_state.show_mapping = True
+        else:
+            st.session_state.show_mapping = False
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔍 Extract with AI", use_container_width=True, type="primary"):
+        if st.button("🔄 Re‑extract", use_container_width=True):
             if st.session_state.event_text.strip():
-                if st.session_state.model:
-                    with st.spinner("🧠 AI is thinking..."):
-                        parsed = parse_with_ai(st.session_state.event_text)
-                        if parsed:
-                            st.session_state.ai_parsed = parsed
-                            st.session_state.show_mapping = True
-                        else:
-                            st.warning("AI parsing failed. Using rule‑based fallback.")
-                            st.session_state.ai_parsed = None
-                            st.session_state.show_mapping = True
-                else:
-                    st.warning("No AI key provided. Using rule‑based extraction.")
-                    st.session_state.ai_parsed = None
-                    st.session_state.show_mapping = True
+                st.session_state.show_mapping = True
             else:
                 st.warning("Please paste some text first.")
     with c2:
         if st.button("🗑️ Clear / Reset", use_container_width=True):
             clear_all()
 
-    if st.session_state.event_text.strip() and not st.session_state.show_mapping:
-        st.session_state.show_mapping = True
-
 with col_form:
     if st.session_state.show_mapping and st.session_state.event_text.strip():
         text = st.session_state.event_text
 
-        # --- Get best guesses: AI first, then fallback ---
-        if st.session_state.ai_parsed:
-            ai = st.session_state.ai_parsed
-            best_title = ai.get('title', '')
-            best_date = parse_date_from_ai(ai.get('date', ''))
-            best_start = parse_time_from_ai(ai.get('start_time', ''))
-            best_end = parse_time_from_ai(ai.get('end_time', ''))
-            best_location = ai.get('location', '')
-        else:
-            best_title = extract_title(text)
-            best_date = extract_date(text)
-            best_start, best_end = extract_time_range(text)
-            best_location = extract_location(text)
+        # --- Extract using rule-based functions ---
+        best_title = extract_title(text)
+        best_date = extract_date(text)
+        best_start, best_end = extract_time_range(text)
+        best_location = extract_location(text)
 
         # Defaults if missing
         today = datetime.today().date()
