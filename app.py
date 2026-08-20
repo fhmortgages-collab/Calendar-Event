@@ -4,7 +4,157 @@ from datetime import datetime, time, timedelta
 from urllib.parse import quote
 import json
 
-# --- Try to import Gemini, but don't crash if not installed ---
+# --- HELPER FUNCTIONS (rule‑based fallback) ---
+# These are defined first so they are available when needed.
+
+def extract_title(text):
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    for line in lines:
+        lower = line.lower()
+        if re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)', lower):
+            continue
+        if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', lower):
+            continue
+        if re.search(r'(location|venue|room|building|street|ave|blvd|campus|hosted by|sponsored by)', lower):
+            continue
+        if len(line.split()) > 12:
+            continue
+        return line
+    return lines[0] if lines else ""
+
+def extract_organization(text):
+    candidates = []
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    org_patterns = [
+        r'(?i)(?:hosted by|sponsored by|presented by|organized by|from|with)\s+([^\n,]+)',
+        r'(?i)([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:Inc|Corp|LLC|Ltd|Company|Co\.?|Corporation|Foundation|Agency|Group|Partners|Associates)',
+        r'(?i)([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:meeting|event|workshop|seminar|conference)',
+    ]
+    for pattern in org_patterns:
+        matches = re.findall(pattern, text)
+        for m in matches:
+            org = m.strip()
+            if len(org) > 2 and len(org) < 50:
+                candidates.append(org)
+    for line in lines:
+        if re.search(r'\b(at|with)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)', line):
+            match = re.search(r'\b(at|with)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)', line)
+            if match and len(match.group(2)) > 2:
+                candidates.append(match.group(2))
+    unique = list(dict.fromkeys(candidates))
+    return unique[0] if unique else ""
+
+def extract_date(text):
+    today = datetime.today().date()
+    year = today.year
+    patterns = [
+        r'(?i)(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})?',
+        r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*,?\s*(\d{4})?',
+        r'(\d{1,2})/(\d{1,2})/(\d{2,4})',
+        r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})',
+        r'(?i)(tomorrow|next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            groups = match.groups()
+            if len(groups) == 3:
+                if groups[0].isalpha():
+                    month_str = groups[0]
+                    day = int(groups[1])
+                    yr = int(groups[2]) if groups[2] else year
+                    month = datetime.strptime(month_str[:3], "%b").month
+                    try:
+                        return datetime(yr, month, day).date()
+                    except:
+                        pass
+                elif groups[1].isalpha():
+                    day = int(groups[0])
+                    month_str = groups[1]
+                    yr = int(groups[2]) if groups[2] else year
+                    month = datetime.strptime(month_str[:3], "%b").month
+                    try:
+                        return datetime(yr, month, day).date()
+                    except:
+                        pass
+                else:
+                    a, b, c = int(groups[0]), int(groups[1]), int(groups[2])
+                    if c < 100:
+                        c += 2000 if c < 70 else 1900
+                    if a <= 12 and b <= 31:
+                        try:
+                            return datetime(c, a, b).date()
+                        except:
+                            pass
+                    if b <= 12 and a <= 31:
+                        try:
+                            return datetime(c, b, a).date()
+                        except:
+                            pass
+            elif len(groups) == 1:
+                keyword = groups[0].lower()
+                if keyword == 'tomorrow':
+                    return today + timedelta(days=1)
+                if keyword.startswith('next '):
+                    day_name = keyword.split()[1]
+                    days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+                    target = days.index(day_name)
+                    today_weekday = today.weekday()
+                    diff = target - today_weekday
+                    if diff <= 0:
+                        diff += 7
+                    return today + timedelta(days=diff)
+    return None
+
+def extract_time_range(text):
+    def parse(t_str):
+        for fmt in ("%I:%M%p", "%I%p"):
+            try:
+                return datetime.strptime(t_str.replace(" ", "").upper(), fmt).time()
+            except:
+                continue
+        return None
+
+    match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', text, re.IGNORECASE)
+    if match:
+        start = parse(match.group(1))
+        end = parse(match.group(2))
+        if start and end:
+            return start, end
+    match = re.search(r'(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))', text, re.IGNORECASE)
+    if match:
+        t = parse(match.group(1))
+        if t:
+            end = (datetime.combine(datetime.today(), t) + timedelta(hours=1)).time()
+            return t, end
+    return None, None
+
+def extract_location(text):
+    patterns = [
+        r'(?i)(?:location|venue|room|address|where|place|at)\s*[:.]?\s*([^\n]+)',
+        r'(?i)(?:in|at)\s+([^\n,]+(?:street|st|ave|avenue|blvd|road|rd|building|room|suite|floor|hall|center|centre|theater|theatre|campus|nyc|new york))',
+        r'(?i)(?:room|suite|floor|office)\s*[:.]?\s*([^\n]+)',
+        r'(?i)([A-Z][a-zA-Z]+\s+(?:building|tower|plaza|center|centre|hall|house))',
+        r'(\d{1,5}\s+[A-Za-z]+\s+(?:street|st|ave|avenue|road|rd|blvd|boulevard|drive|dr|lane|ln|way|plaza|square))',
+    ]
+    candidates = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for m in matches:
+            loc = m.strip()
+            if len(loc) > 2 and len(loc) < 100:
+                loc = re.sub(r'\s+', ' ', loc)
+                candidates.append(loc)
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    for line in lines:
+        lower = line.lower()
+        if re.search(r'\b(in|at)\s+[a-z]', lower) and len(line.split()) < 15:
+            if not re.search(r'\d{1,2}:\d{2}', line):
+                candidates.append(line)
+    unique = list(dict.fromkeys(candidates))
+    return unique[0] if unique else ""
+
+# --- Try AI ---
 try:
     import google.generativeai as genai
 except ImportError:
@@ -13,15 +163,11 @@ except ImportError:
 # --- Load API key securely ---
 API_KEY = None
 try:
-    # For Streamlit Cloud (secrets)
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
-    # For local dev with .streamlit/secrets.toml
-    try:
-        import os
-        API_KEY = os.getenv("GEMINI_API_KEY")
-    except:
-        pass
+    # For local dev (fallback to environment variable)
+    import os
+    API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- Configure AI if key exists ---
 model = None
@@ -33,11 +179,6 @@ if API_KEY and genai:
     except Exception as e:
         st.sidebar.error(f"AI config error: {e}")
 
-# --- Rule‑based fallback functions (same as before) ---
-# ... (copy the functions: extract_title, extract_date, etc. from previous version) ...
-# For brevity, I'll assume they are defined – in the full code they are.
-
-# --- AI extraction function ---
 def parse_with_ai(text):
     if not model:
         return None
@@ -45,11 +186,11 @@ def parse_with_ai(text):
 You are an expert calendar assistant. Extract event details from the following text.
 Return ONLY a valid JSON object with these exact keys:
 - "title" (string)
-- "organization" (string, e.g., company name or host)
+- "organization" (string)
 - "date" (string in YYYY-MM-DD format)
 - "start_time" (string in HH:MM AM/PM format, e.g. "02:30 PM")
 - "end_time" (string in HH:MM AM/PM format)
-- "location" (string, full address or room)
+- "location" (string)
 
 If a piece of information is missing, use an empty string "".
 
@@ -64,7 +205,6 @@ Text:
         st.error(f"AI error: {e}")
         return None
 
-# --- Parsing helpers ---
 def parse_time_from_ai(t_str):
     if not t_str:
         return None
@@ -108,15 +248,18 @@ if 'final_location' not in st.session_state:
     st.session_state.final_location = ""
 
 def clear_all():
-    for key in ['show_mapping', 'event_text', 'ai_parsed', 
-                'final_title', 'final_org', 'final_date', 
-                'final_start', 'final_end', 'final_location']:
-        st.session_state[key] = None if key != 'show_mapping' else False
-    st.session_state.event_text = ""
     st.session_state.show_mapping = False
+    st.session_state.event_text = ""
+    st.session_state.ai_parsed = None
+    st.session_state.final_title = ""
+    st.session_state.final_org = ""
+    st.session_state.final_date = datetime.today().date()
+    st.session_state.final_start = time(9, 0)
+    st.session_state.final_end = time(10, 0)
+    st.session_state.final_location = ""
     st.rerun()
 
-# --- UI Layout ---
+# --- UI ---
 st.title("📅 Smart Event Parser (AI‑Powered)")
 
 col_input, col_form = st.columns([1, 1.3], gap="small")
@@ -176,10 +319,8 @@ with col_form:
             best_end = parse_time_from_ai(ai.get('end_time', ''))
             best_location = ai.get('location', '')
         else:
-            # rule‑based fallback
-            # (you can reuse the functions from the previous version)
             best_title = extract_title(text)
-            best_org = extract_organization(text)  # add if you have it
+            best_org = extract_organization(text)
             best_date = extract_date(text)
             best_start, best_end = extract_time_range(text)
             best_location = extract_location(text)
@@ -193,7 +334,7 @@ with col_form:
         if best_end is None:
             best_end = time(10, 0)
 
-        # Update session state with bests if empty
+        # Store bests in session state (if not already set by user)
         if best_title and not st.session_state.final_title:
             st.session_state.final_title = best_title
         if best_org and not st.session_state.final_org:
@@ -202,30 +343,20 @@ with col_form:
             st.session_state.final_location = best_location
 
         st.markdown("### 📝 Verify & Map Details")
-        manual_opt = "Other (Manual Entry)"
 
-        # --- TITLE ---
-        title_options = [best_title] if best_title else [""]
-        if best_title and st.session_state.final_title != best_title:
-            title_options.append(st.session_state.final_title)
-        title_options.append(manual_opt)
-        # Simplify: just show a text input with the best guess
+        # --- Title ---
         final_title = st.text_input("Event Name", value=st.session_state.final_title)
         st.session_state.final_title = final_title
 
-        # --- ORGANIZATION ---
-        org_options = [best_org] if best_org else [""]
-        if best_org and st.session_state.final_org != best_org:
-            org_options.append(st.session_state.final_org)
-        org_options.append(manual_opt)
+        # --- Organization ---
         final_org = st.text_input("Organization / Host", value=st.session_state.final_org)
         st.session_state.final_org = final_org
 
-        # --- DATE ---
+        # --- Date ---
         final_date = st.date_input("Date", value=st.session_state.final_date)
         st.session_state.final_date = final_date
 
-        # --- TIME (compact picker) ---
+        # --- Time (compact picker) ---
         st.markdown("**Event Time**")
         def compact_time_picker(label, default_time, key_prefix):
             hour_12 = default_time.hour % 12
@@ -272,11 +403,11 @@ with col_form:
         st.session_state.final_start = final_start
         st.session_state.final_end = final_end
 
-        # --- LOCATION ---
+        # --- Location ---
         final_location = st.text_input("Location", value=st.session_state.final_location)
         st.session_state.final_location = final_location
 
-        # --- NOTES ---
+        # --- Notes ---
         final_desc = st.text_area("Event Notes (optional)", value=text, height=68)
 
         # --- Generate Link ---
