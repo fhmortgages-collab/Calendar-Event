@@ -5,6 +5,8 @@ from urllib.parse import quote
 import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
+import os
+import sys
 
 # Page Configuration
 st.set_page_config(page_title="Event Parser & Calendar Sync", page_icon="📅", layout="wide")
@@ -14,10 +16,13 @@ if 'show_mapping' not in st.session_state:
     st.session_state.show_mapping = False
 if 'widget_key' not in st.session_state:
     st.session_state.widget_key = 0
+if 'last_error' not in st.session_state:
+    st.session_state.last_error = ""
 
 def clear_all_action():
     st.session_state.show_mapping = False
-    st.session_state.widget_key += 1 
+    st.session_state.widget_key += 1
+    st.session_state.last_error = ""
 
 # --- MAIN LAYOUT ---
 st.title("📅 Compact Event Parser")
@@ -25,7 +30,12 @@ st.title("📅 Compact Event Parser")
 col_input, col_form = st.columns([1, 1.3], gap="small")
 
 with col_input:
-    input_method = st.radio("Input Method", ["Upload PDF", "Upload Image", "Paste Text"], horizontal=True, label_visibility="collapsed", key=f"radio_{st.session_state.widget_key}")
+    # Use dropdown (selectbox) instead of radio
+    input_method = st.selectbox(
+        "Input Method",
+        ["Upload PDF", "Upload Image", "Paste Text"],
+        key=f"method_{st.session_state.widget_key}"
+    )
     
     extracted_text = ""
     
@@ -39,20 +49,27 @@ with col_input:
                     raw_pdf_text += page.get_text() + "\n"
                 raw_pdf_text = raw_pdf_text.strip()
                 
-                # If no text was extracted, fallback to OCR on each page
+                # If no text, try OCR
                 if not raw_pdf_text:
-                    with st.spinner("OCR scanning PDF pages..."):
+                    with st.spinner("OCR scanning PDF pages (this may take a while)..."):
                         ocr_text = ""
-                        for page_num in range(len(doc)):
-                            page = doc.load_page(page_num)
-                            pix = page.get_pixmap()
-                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                            ocr_text += pytesseract.image_to_string(img) + "\n"
-                        raw_pdf_text = ocr_text.strip()
+                        try:
+                            for page_num in range(len(doc)):
+                                page = doc.load_page(page_num)
+                                pix = page.get_pixmap()
+                                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                                ocr_text += pytesseract.image_to_string(img) + "\n"
+                            raw_pdf_text = ocr_text.strip()
+                        except Exception as e:
+                            st.session_state.last_error = f"OCR failed: {str(e)}"
+                            st.error(f"OCR error: {e}. Please install Tesseract or paste text manually.")
+                            # Fallback: allow manual paste
+                            raw_pdf_text = ""
                 
                 extracted_text = "\n".join([line.strip() for line in raw_pdf_text.split('\n') if line.strip()])
             except Exception as e:
                 st.error(f"PDF processing error: {str(e)}")
+                st.session_state.last_error = f"PDF error: {str(e)}"
                 
     elif input_method == "Upload Image":
         uploaded_image = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"], label_visibility="collapsed", key=f"img_{st.session_state.widget_key}")
@@ -63,14 +80,22 @@ with col_input:
                     raw_img_text = pytesseract.image_to_string(image)
                 extracted_text = "\n".join([line.strip() for line in raw_img_text.split('\n') if line.strip()])
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"Image OCR error: {str(e)}")
+                st.session_state.last_error = f"OCR error: {str(e)}"
 
-    raw_text = st.text_area("Event Details Text", value=extracted_text, height=180, placeholder="Event text will appear here...", key=f"text_{st.session_state.widget_key}")
+    # Text area – always visible
+    raw_text = st.text_area("Event Details Text", value=extracted_text, height=180, 
+                            placeholder="Event text will appear here...", key=f"text_{st.session_state.widget_key}")
 
-    # If we successfully extracted text from file, show mapping automatically
-    if extracted_text.strip():
-        st.session_state.show_mapping = True
+    # Debug expander – shows what was extracted
+    with st.expander("🔍 Debug info (extracted text length)"):
+        st.write(f"Extracted text length: {len(extracted_text)} characters")
+        if st.session_state.last_error:
+            st.warning(f"Last error: {st.session_state.last_error}")
+        if extracted_text:
+            st.text_area("Extracted content (first 500 chars)", extracted_text[:500], height=100)
 
+    # Buttons
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Extract Info", use_container_width=True, type="primary"):
@@ -78,12 +103,17 @@ with col_input:
                 st.session_state.show_mapping = True
             else:
                 st.warning("No text to process. Please upload a file or enter text.")
+                st.session_state.show_mapping = False
     with c2:
         st.button("🗑️ Clear / Reset", on_click=clear_all_action, use_container_width=True)
 
+    # Auto-show mapping if text is present (but only if we have some text)
+    if extracted_text.strip():
+        st.session_state.show_mapping = True
+
 with col_form:
     if st.session_state.show_mapping and raw_text.strip():
-        # --- SMART FILTERING LOGIC ---
+        # --- SMART FILTERING LOGIC (unchanged) ---
         all_lines, title_candidates, date_candidates, time_candidates, loc_candidates = [], [], [], [], []
         
         extracted_lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
